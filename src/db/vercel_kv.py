@@ -516,5 +516,56 @@ class KVDatabase:
             return res
         return []
 
+    def save_sniper_policy(self, policy: dict):
+        """Salva a política matemática de risco e execução adaptativa do Sniper."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(policy), safe='')
+        self._execute_command("set", "ai:sniper_policy", encoded)
+
+    def get_sniper_policy(self) -> dict:
+        """Retorna a política matemática calibrada pela IA para o Sniper."""
+        import urllib.parse
+        defaults = {
+            "risk_mode": "balanced",
+            "target_pct": 2.00,
+            "trailing_arm_pct": 1.80,
+            "trailing_buffer_pct": 0.40,
+            "min_stop_pct": 1.20,
+            "max_stop_pct": 2.00,
+            "max_spread_pct": 0.08,
+            "min_rvol": 1.5,
+            "disqualified_pairs": [],
+            "btc_macro_filter": True
+        }
+        try:
+            data = self._execute_command("get", "ai:sniper_policy")
+            if data:
+                decoded = urllib.parse.unquote(data) if isinstance(data, str) else data
+                parsed = json.loads(decoded) if isinstance(decoded, str) else decoded
+                defaults.update(parsed)
+        except:
+            pass
+        return defaults
+
+    def save_btc_macro_regime(self, regime_data: dict):
+        """Salva a leitura macro do Bitcoin para uso de Gatekeeper nos agentes e frontend."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(regime_data), safe='')
+        self._execute_command("set", "ai:btc_macro_regime", encoded)
+
+    def get_btc_macro_regime(self) -> dict:
+        """Retorna o estado macro do BTC (15m EMA20 + RSI14)."""
+        import urllib.parse
+        defaults = {"healthy": True, "regime": "NEUTRO", "reason": "Sem leitura recente"}
+        try:
+            data = self._execute_command("get", "ai:btc_macro_regime")
+            if data:
+                decoded = urllib.parse.unquote(data) if isinstance(data, str) else data
+                parsed = json.loads(decoded) if isinstance(decoded, str) else decoded
+                defaults.update(parsed)
+        except:
+            pass
+        return defaults
+
 kv_db = KVDatabase()
 

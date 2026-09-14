@@ -15,15 +15,19 @@ class SniperTraderAgent:
     - Distribui o capital proporcionalmente entre as top 1-3 oportunidades.
     - Executa e acompanha cada ativo de forma individual e assíncrona com Trailing Stop e Anti-Loss.
     """
-    CANDIDATES_USDT = ['NEAR/USDT', 'PEPE/USDT', 'SUI/USDT', 'DOGE/USDT', 'XRP/USDT', 'SOL/USDT', 'WIF/USDT', 'FET/USDT', 'SHIB/USDT']
-    CANDIDATES_BRL = ['XRP/BRL', 'SOL/BRL', 'NEAR/BRL', 'DOGE/BRL', 'PEPE/BRL', 'BTC/BRL']
+    CANDIDATES_USDT = [
+        'SOL/USDT', 'NEAR/USDT', 'SUI/USDT', 'XRP/USDT', 'DOGE/USDT', 
+        'PEPE/USDT', 'FET/USDT', 'AVAX/USDT', 'LINK/USDT', 'RENDER/USDT'
+    ]
 
     def __init__(self, capital: float = 10.0, currency: str = "USDT", source_asset: str = "USDT", symbol: str = None, dry_run: bool = False):
         self.capital = float(capital)
-        self.currency = currency.upper()
-        self.source_asset = source_asset.upper() if source_asset else self.currency
+        # O Sniper opera estritamente em pares USDT para máxima profundidade de book e menor spread
+        self.currency = "USDT"
+        self.source_asset = source_asset.upper() if source_asset else "USDT"
         self.symbol = symbol  # Se fornecido um par específico, opera ele; se None, ativa o scanner multi-ativo
         self.dry_run = dry_run
+        self.policy = kv_db.get_sniper_policy()
         self.exchange = ccxt.binance({
             'apiKey': settings.API_KEY,
             'secret': settings.SECRET_KEY,
@@ -34,6 +38,55 @@ class SniperTraderAgent:
         self.snapshot_interval_sec = 30   # Snapshots a cada 30s
         self.liquidity_rotation = None
         self.started_at = None
+
+    def check_btc_macro_trend(self) -> dict:
+        """
+        Verifica a tendência macro do Bitcoin no gráfico de 15 minutos.
+        Se o BTC estiver caindo fortemente (abaixo da EMA20 com RSI < 42),
+        rompimentos em altcoins falham em 75% dos casos.
+        """
+        try:
+            bars = self.exchange.fetch_ohlcv('BTC/USDT', timeframe='15m', limit=30)
+            if not bars or len(bars) < 20:
+                return {"healthy": True, "regime": "NEUTRO", "reason": "Poucos dados do BTC"}
+            df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['ema20'] = ta.ema(df['close'], length=20)
+            df['rsi14'] = ta.rsi(df['close'], length=14)
+            latest = df.iloc[-1]
+            close = float(latest['close'])
+            ema = float(latest['ema20'])
+            rsi = float(latest['rsi14'])
+
+            if close < ema * 0.997 and rsi < 42:
+                res = {
+                    "healthy": False,
+                    "regime": "QUEDA",
+                    "reason": f"BTC em queda no 15m (${close:.0f} < EMA20 ${ema:.0f} | RSI {rsi:.1f})"
+                }
+            elif close >= ema and rsi >= 48:
+                res = {
+                    "healthy": True,
+                    "regime": "ALTA",
+                    "reason": f"BTC favorável no 15m (${close:.0f} >= EMA20 ${ema:.0f} | RSI {rsi:.1f})"
+                }
+            else:
+                res = {
+                    "healthy": True,
+                    "regime": "CONSOLIDAÇÃO",
+                    "reason": f"BTC em consolidação neutra (${close:.0f} próx. EMA20 ${ema:.0f} | RSI {rsi:.1f})"
+                }
+            try:
+                kv_db.save_btc_macro_regime(res)
+            except:
+                pass
+            return res
+        except Exception as e:
+            fallback = {"healthy": True, "regime": "NEUTRO", "reason": f"Aviso BTC: {e}"}
+            try:
+                kv_db.save_btc_macro_regime(fallback)
+            except:
+                pass
+            return fallback
 
     def emit_thought(self, msg_type: str, symbol: str, tag: str, message: str):
         """Emite uma observação ou justificativa no chat em tempo real e persiste no Redis."""
@@ -57,7 +110,7 @@ class SniperTraderAgent:
         print(f"[Sniper Chat | {tag}] {symbol}: {message}")
 
     def fetch_1m_ta(self, symbol: str) -> dict:
-        """Coleta as últimas velas de 1m e calcula indicadores rápidos (Bollinger, RSI-7, VWAP)."""
+        """Coleta velas de 1m e 5m para calcular Bollinger, RSI-7, VWAP, RVOL e ATR(14)."""
         try:
             bars = self.exchange.fetch_ohlcv(symbol, timeframe='1m', limit=35)
             if not bars or len(bars) < 20:
@@ -79,35 +132,78 @@ class SniperTraderAgent:
             # VWAP Intradiário
             df['typical'] = (df['high'] + df['low'] + df['close']) / 3
             vol_sum = df['volume'].cumsum()
-            df['vwap'] = (df['typical'] * df['volume']).cumsum() / (vol_sum.replace(0, np.nan) if 'np' in globals() else vol_sum)
+            df['vwap'] = (df['typical'] * df['volume']).cumsum() / vol_sum.replace(0, 1)
 
             # Volatilidade de 10 min
             df['rolling_max'] = df['high'].rolling(10).max()
             df['rolling_min'] = df['low'].rolling(10).min()
             df['range_10m_pct'] = ((df['rolling_max'] - df['rolling_min']) / df['rolling_min'].replace(0, 1)) * 100
 
+            # Volume Relativo (RVOL): volume da barra atual / média das últimas 10 barras
+            vol_mean_10 = df['volume'].iloc[-11:-1].mean() if len(df) >= 11 else df['volume'].mean()
+            rvol = float(df['volume'].iloc[-1]) / (vol_mean_10 if vol_mean_10 > 0 else 1.0)
+
             latest = df.iloc[-1]
+            close_price = float(latest['close'])
+
+            # ATR(14) no gráfico de 5m para calibragem de stop dinâmico
+            atr_pct = 1.0
+            try:
+                bars_5m = self.exchange.fetch_ohlcv(symbol, timeframe='5m', limit=20)
+                if bars_5m and len(bars_5m) >= 15:
+                    df5 = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    atr_series = ta.atr(df5['high'], df5['low'], df5['close'], length=14)
+                    if atr_series is not None and not pd.isna(atr_series.iloc[-1]):
+                        atr_pct = (float(atr_series.iloc[-1]) / close_price) * 100
+            except:
+                atr_pct = 1.0
+
             return {
                 "symbol": symbol,
-                "close": float(latest['close']),
+                "close": close_price,
                 "rsi7": float(latest['rsi7']) if not pd.isna(latest['rsi7']) else 50.0,
-                "bb_lower": float(latest['bb_lower']) if 'bb_lower' in latest else float(latest['close'] * 0.998),
-                "bb_upper": float(latest['bb_upper']) if 'bb_upper' in latest else float(latest['close'] * 1.008),
-                "vwap": float(latest['vwap']) if not pd.isna(latest['vwap']) else float(latest['close']),
-                "range_10m_pct": float(latest['range_10m_pct']) if not pd.isna(latest['range_10m_pct']) else 0.5
+                "bb_lower": float(latest['bb_lower']) if 'bb_lower' in latest else float(close_price * 0.998),
+                "bb_upper": float(latest['bb_upper']) if 'bb_upper' in latest else float(close_price * 1.008),
+                "vwap": float(latest['vwap']) if not pd.isna(latest['vwap']) else close_price,
+                "range_10m_pct": float(latest['range_10m_pct']) if not pd.isna(latest['range_10m_pct']) else 0.5,
+                "rvol": round(rvol, 2),
+                "atr_pct": round(atr_pct, 2)
             }
         except Exception as e:
             return {}
 
     def scan_opportunities(self) -> list:
-        """Escaneia a cesta de altcoins candidatas e ranqueia as melhores oportunidades de scalping."""
-        candidates = self.CANDIDATES_USDT if self.currency == 'USDT' else self.CANDIDATES_BRL
+        """Escaneia altcoins candidatas em USDT, aplica trava de spread e ranqueia as melhores oportunidades."""
+        candidates = self.CANDIDATES_USDT
         if self.symbol and self.symbol in candidates:
             candidates = [self.symbol]
 
+        disqualified = set(self.policy.get("disqualified_pairs", []))
+        max_spread = float(self.policy.get("max_spread_pct", 0.08))
+        min_stop_cfg = float(self.policy.get("min_stop_pct", 1.30))
+        max_stop_cfg = float(self.policy.get("max_stop_pct", 2.00))
+
         scored = []
-        print(f"[Sniper Scanner] Varrendo {len(candidates)} pares em busca de volatilidade e oportunidades...")
+        print(f"[Sniper Scanner] Varrendo {len(candidates)} pares em USDT (Max Spread: {max_spread}%)...")
+
         for sym in candidates:
+            if sym in disqualified:
+                print(f"[Sniper Scanner] 🚫 {sym} ignorado (bloqueado temporariamente pela IA por perdas anteriores).")
+                continue
+
+            # 1. Trava Rígida de Spread Bid/Ask
+            try:
+                ob = self.exchange.fetch_order_book(sym, limit=5)
+                best_bid = float(ob['bids'][0][0]) if ob.get('bids') else 0.0
+                best_ask = float(ob['asks'][0][0]) if ob.get('asks') else 0.0
+                if best_bid > 0 and best_ask > 0:
+                    spread_pct = ((best_ask - best_bid) / best_bid) * 100
+                    if spread_pct > max_spread:
+                        print(f"[Sniper Scanner] ⚠️ {sym} descartado: spread de {spread_pct:.2f}% acima do teto de {max_spread}%.")
+                        continue
+            except Exception as e_ob:
+                pass
+
             ta_data = self.fetch_1m_ta(sym)
             if not ta_data or ta_data.get('close', 0) <= 0:
                 continue
@@ -117,19 +213,26 @@ class SniperTraderAgent:
             range_10m = ta_data['range_10m_pct']
             vwap = ta_data['vwap']
             bb_lower = ta_data['bb_lower']
+            rvol = ta_data.get('rvol', 1.0)
+            atr_pct = ta_data.get('atr_pct', 1.0)
+
+            # Cálculo de Stop Dinâmico por ATR (mínimo 1.3%, máximo 2.0%, ideal 1.5x ATR)
+            dynamic_stop_pct = round(max(min_stop_cfg, min(max_stop_cfg, atr_pct * 1.5)), 2)
 
             # Score de Oportunidade:
-            # - Maior volatilidade nos 10m ganha mais pontos
-            # - RSI sobrevenda (< 35) ou rompimento de momentum (> 50 e < 65) ganha bônus
-            score = range_10m * 10.0
+            # - Maior volatilidade nos 10m ganha pontos
+            # - RVOL > 1.5x ganha bônus de fluxo
+            # - RSI sobrevenda (< 32) ou rompimento de VWAP ganha bônus
+            score = range_10m * 10.0 + min(rvol * 5.0, 15.0)
             setup = "Neutro"
+
             if rsi < 32 and price <= bb_lower * 1.002:
                 score += 35.0
                 setup = "Sobrevenda Bollinger"
             elif 51 <= rsi <= 64 and price >= vwap * 1.0005:
                 score += 30.0
                 setup = "Rompimento VWAP"
-            elif range_10m >= 0.8:
+            elif range_10m >= 1.0:
                 score += 20.0
                 setup = "Alta Volatilidade"
 
@@ -138,6 +241,9 @@ class SniperTraderAgent:
                 "price": price,
                 "rsi7": round(rsi, 1),
                 "range_10m_pct": round(range_10m, 2),
+                "rvol": rvol,
+                "atr_pct": atr_pct,
+                "dynamic_stop_pct": dynamic_stop_pct,
                 "score": round(score, 1),
                 "setup": setup,
                 "ta": ta_data
@@ -145,59 +251,45 @@ class SniperTraderAgent:
 
         scored.sort(key=lambda x: x['score'], reverse=True)
         print(f"[Sniper Scanner] Top Oportunidades Encontradas:")
-        for s in scored[:4]:
-            print(f"  • {s['symbol']}: Range 10m {s['range_10m_pct']}% | RSI {s['rsi7']} | Setup: {s['setup']} (Score: {s['score']})")
+        for s in scored[:3]:
+            print(f"  • {s['symbol']}: Range 10m {s['range_10m_pct']}% | RSI {s['rsi7']} | RVOL {s['rvol']}x | ATR {s['atr_pct']}% | Stop Sugerido: -{s['dynamic_stop_pct']}% | Setup: {s['setup']} (Score: {s['score']})")
 
         return scored
 
     def allocate_capital(self, scored_candidates: list) -> list:
-        """Distribui o capital entre os Top 1 a 3 ativos respeitando os limites da Binance."""
+        """Aloca 100% do capital disponível no ativo #1 (Top Oportunidade) eliminando a dispersão."""
         if not scored_candidates:
             return []
 
-        # Determina o lote mínimo de cada moeda
-        # PEPE, DOGE, SHIB, WIF = $1.00 USDT
-        # Demais pares USDT = $5.00 USDT
-        # Pares BRL = R$ 10.00
-        min_costs = {
-            'PEPE/USDT': 1.0, 'DOGE/USDT': 1.0, 'SHIB/USDT': 1.0, 'WIF/USDT': 1.0, 'FLOKI/USDT': 1.0
-        }
-        default_min = 5.0 if self.currency == 'USDT' else 10.0
+        top = scored_candidates[0]
+        sym = top['symbol']
+        min_cost = 1.0 if any(m in sym for m in ['PEPE', 'DOGE', 'SHIB', 'WIF', 'FLOKI']) else 5.0
+        
+        if self.capital < min_cost:
+            print(f"[Sniper Alocação] Capital ${self.capital:.2f} abaixo do mínimo ${min_cost} da Binance.")
+            return []
 
-        allocations = []
-        rem_capital = self.capital
+        target_pct = float(self.policy.get("target_pct", 2.00))
+        trailing_arm_pct = float(self.policy.get("trailing_arm_pct", 1.80))
+        trailing_buffer_pct = float(self.policy.get("trailing_buffer_pct", 0.40))
+        dynamic_stop_pct = top.get('dynamic_stop_pct', 1.50)
 
-        for cand in scored_candidates:
-            sym = cand['symbol']
-            sym_min = min_costs.get(sym, default_min)
-            if rem_capital < sym_min:
-                continue
+        print(f"\n[Sniper Alocação] Concentrando 100% do capital (${self.capital:.2f} {self.currency}) no melhor ativo: {sym}")
+        print(f"  Setup: {top['setup']} | Meta: +{target_pct:.2f}% | Stop Dinâmico: -{dynamic_stop_pct:.2f}% | Trailing Buffer: {trailing_buffer_pct:.2f}%")
 
-            # Se temos capital para múltiplos ativos
-            if rem_capital >= (sym_min * 2) and len(allocations) < 2:
-                alloc = round(rem_capital / 2, 2)
-            elif rem_capital >= (sym_min * 3) and len(allocations) < 3:
-                alloc = round(rem_capital / 3, 2)
-            else:
-                alloc = round(rem_capital, 2)
-
-            allocations.append({
-                "symbol": sym,
-                "allocated_capital": alloc,
-                "min_cost": sym_min,
-                "setup": cand['setup'],
-                "price": cand['price'],
-                "ta": cand['ta']
-            })
-            rem_capital -= alloc
-            if len(allocations) >= 3 or rem_capital < default_min:
-                break
-
-        # Se sobrou capital não alocado, adiciona ao primeiro colocado
-        if rem_capital > 0 and allocations:
-            allocations[0]['allocated_capital'] = round(allocations[0]['allocated_capital'] + rem_capital, 2)
-
-        return allocations
+        return [{
+            "symbol": sym,
+            "allocated_capital": round(self.capital, 2),
+            "min_cost": min_cost,
+            "setup": top['setup'],
+            "price": top['price'],
+            "ta": top['ta'],
+            "atr_pct": top.get('atr_pct', 1.0),
+            "dynamic_stop_pct": dynamic_stop_pct,
+            "target_pct": target_pct,
+            "trailing_arm_pct": trailing_arm_pct,
+            "trailing_buffer_pct": trailing_buffer_pct
+        }]
 
     def execute_flash_liquidity(self):
         """Se o ativo de origem for uma cripto (ex: BTC), converte fração para USDT/BRL para operar."""
@@ -286,6 +378,39 @@ class SniperTraderAgent:
         print(f"  Modo: {'SIMULAÇÃO (DRY RUN)' if self.dry_run else 'MERCADO REAL'}")
         print(f"========================================================\n")
 
+        # 0. Verificação do Gatekeeper Macro (Bitcoin 15m)
+        btc_gate = self.check_btc_macro_trend()
+        session_info["btc_regime"] = btc_gate.get("regime", "NEUTRO")
+        session_info["btc_reason"] = btc_gate.get("reason", "")
+        
+        if self.policy.get("btc_macro_filter", True) and not btc_gate.get("healthy", True):
+            warning_msg = f"🛡️ Entrada suspensa pelo Gatekeeper Macro: {btc_gate.get('reason')}. Mercado em alto risco de falso rompimento nas altcoins."
+            self.emit_thought("PROTECTION", "BTC", "MACRO", warning_msg)
+            print(f"\n[Sniper Macro] {warning_msg}\n")
+            
+            summary = {
+                "status": "completed",
+                "source_asset": self.source_asset,
+                "initial_capital": self.capital,
+                "final_capital": self.capital,
+                "currency": self.currency,
+                "net_profit_fiat": 0.0,
+                "pnl_pct": 0.0,
+                "total_trades": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "win_rate_pct": 0.0,
+                "duration_str": "0 min",
+                "result_status": "PROFIT",
+                "reason": btc_gate.get("reason"),
+                "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "trades": []
+            }
+            kv_db.save_daytrade_session_history(summary)
+            kv_db.finish_daytrade_session(summary)
+            self.revert_flash_liquidity(self.capital)
+            return summary
+
         # 1. Conversão Flash de Liquidez se originar de crypto (ex: BTC)
         self.execute_flash_liquidity()
         if self.source_asset in ['BTC', 'ETH', 'SOL', 'BNB']:
@@ -300,14 +425,41 @@ class SniperTraderAgent:
         scored = self.scan_opportunities()
         allocated_targets = self.allocate_capital(scored)
 
-        print(f"\n[Sniper Alocação] Capital distribuído entre {len(allocated_targets)} ativos:")
+        if not allocated_targets:
+            no_target_msg = "Nenhum ativo atendeu aos critérios de volatilidade e spread no momento. Sessão finalizada sem risco."
+            self.emit_thought("SCAN", "SCANNER", "AVISO", no_target_msg)
+            print(f"\n[Sniper Scanner] {no_target_msg}\n")
+            summary = {
+                "status": "completed",
+                "source_asset": self.source_asset,
+                "initial_capital": self.capital,
+                "final_capital": self.capital,
+                "currency": self.currency,
+                "net_profit_fiat": 0.0,
+                "pnl_pct": 0.0,
+                "total_trades": 0,
+                "winning_trades": 0,
+                "losing_trades": 0,
+                "win_rate_pct": 0.0,
+                "duration_str": "0 min",
+                "result_status": "PROFIT",
+                "reason": no_target_msg,
+                "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "trades": []
+            }
+            kv_db.save_daytrade_session_history(summary)
+            kv_db.finish_daytrade_session(summary)
+            self.revert_flash_liquidity(self.capital)
+            return summary
+
+        print(f"\n[Sniper Alocação] Ativo Selecionado:")
         for t in allocated_targets:
-            print(f"  ➔ {t['symbol']}: {t['allocated_capital']:.2f} {self.currency} (Lote Mín: ${t['min_cost']})")
+            print(f"  ➔ {t['symbol']}: ${t['allocated_capital']:.2f} {self.currency} (Meta: +{t.get('target_pct', 2.0)}% | Stop: -{t.get('dynamic_stop_pct', 1.5)}%)")
             self.emit_thought(
                 "SCAN",
                 t['symbol'],
                 "SCANNER",
-                f"Oportunidade selecionada: {t['symbol']} com Volatilidade 10m de {t.get('range_10m_pct', 0.8):.2f}% e RSI-7 em {t.get('rsi7', 50):.1f}. Setup: {t.get('setup', 'Scalping')} (Score: {t.get('score', 30):.1f}). Alocação: ${t['allocated_capital']:.2f} {self.currency}."
+                f"Oportunidade selecionada: {t['symbol']} | Setup: {t.get('setup', 'Scalping')} | ATR: {t.get('atr_pct', 1.0):.2f}% | Alvo: +{t.get('target_pct', 2.0):.2f}% | Stop Dinâmico: -{t.get('dynamic_stop_pct', 1.5):.2f}%. Alocação: ${t['allocated_capital']:.2f} {self.currency}."
             )
 
         active_positions = {}  # { symbol: position_data }
@@ -325,7 +477,9 @@ class SniperTraderAgent:
                 "capital": t['allocated_capital'],
                 "min_cost": t['min_cost'],
                 "price": t['price'],
-                "setup": t.get('setup', 'Scalping')
+                "setup": t.get('setup', 'Scalping'),
+                "dynamic_stop_pct": t.get('dynamic_stop_pct', 1.5),
+                "target_pct": t.get('target_pct', 2.0)
             }
             for t in allocated_targets
         ]
@@ -377,8 +531,15 @@ class SniperTraderAgent:
             }
             kv_db.record_daytrade_microtrade(buy_record)
 
+            dynamic_stop_pct = t.get('dynamic_stop_pct', 1.50)
+            target_pct = t.get('target_pct', 2.00)
+            trailing_arm_pct = t.get('trailing_arm_pct', 1.80)
+            trailing_buffer_pct = t.get('trailing_buffer_pct', 0.40)
+
             breakeven_calc = round(cur_price * 1.002002, 8)
-            target_calc = round(cur_price * 1.0070, 8)
+            target_calc = round(cur_price * (1 + target_pct / 100), 8)
+            arm_calc = round(cur_price * (1 + trailing_arm_pct / 100), 8)
+            stop_calc = round(cur_price * (1 - dynamic_stop_pct / 100), 8)
 
             pos_entry = {
                 "symbol": sym,
@@ -393,6 +554,12 @@ class SniperTraderAgent:
                 "in_position": True,
                 "breakeven_price": breakeven_calc,
                 "target_price": target_calc,
+                "arm_price": arm_calc,
+                "stop_price": stop_calc,
+                "dynamic_stop_pct": dynamic_stop_pct,
+                "target_pct": target_pct,
+                "trailing_arm_pct": trailing_arm_pct,
+                "trailing_buffer_pct": trailing_buffer_pct,
                 "closed": False,
             }
             active_positions[sym] = pos_entry
@@ -415,11 +582,11 @@ class SniperTraderAgent:
                         "PROTECTION",
                         "PACIÊNCIA",
                         "HOLD ILIMITADO",
-                        "Marca de 10 min atingida com posições em andamento. Modo Ilimitado ativado: mantendo posições estagnadas ou em alta lenta sem encerramento por tempo. Venda somente na Linha de Meta (+0.70%) ou no Stop Loss de proteção (-0.45%)."
+                        "Marca de 10 min atingida com posição em andamento. Modo Ilimitado ativado: aguardando pacientemente a Linha de Meta ou Stop Loss de Volatilidade. Sem liquidação precipitada por tempo."
                     )
-                    print(f"[Sniper] ⏳ [10m ATINGIDO] Posições em andamento. Ativando MODO HOLD ILIMITADO: aguardando pacientemente alvo de lucro real. Sem encerramento por tempo!")
+                    print(f"[Sniper] ⏳ [10m ATINGIDO] Posição em andamento. Ativando MODO HOLD ILIMITADO: aguardando meta de lucro real. Sem encerramento por tempo!")
 
-            # B. Monitoramento e Saída Individual de Cada Posição Ancorada na Linha de Meta
+            # B. Monitoramento e Saída Individual Ancorada na Linha de Meta e ATR
             symbols_to_close = []
             for sym, pos in list(active_positions.items()):
                 try:
@@ -433,7 +600,10 @@ class SniperTraderAgent:
                     all_session_positions[sym]['current_price'] = cur_p
                 entry_p = pos['entry_price']
                 breakeven_p = pos.get('breakeven_price', entry_p * 1.002002)
-                target_p = pos.get('target_price', entry_p * 1.0070)
+                target_p = pos.get('target_price', entry_p * 1.020)
+                arm_p = pos.get('arm_price', entry_p * 1.018)
+                dynamic_stop = pos.get('dynamic_stop_pct', 1.50)
+                trailing_buffer = pos.get('trailing_buffer_pct', 0.40)
                 pnl_pct = ((cur_p - entry_p) / entry_p) * 100
                 pos['pnl_pct'] = round(pnl_pct, 2)
                 if sym in all_session_positions:
@@ -442,14 +612,14 @@ class SniperTraderAgent:
                 if cur_p > pos['highest_price']:
                     pos['highest_price'] = cur_p
 
-                # Trailing Stop arma somente após atingir a Linha de Meta (target_p)
-                trailing_armed = pos['highest_price'] >= target_p
-                hit_trailing = trailing_armed and (cur_p <= pos['highest_price'] * 0.9985) and (cur_p >= breakeven_p)
+                # Trailing Stop arma somente após atingir a faixa de lucro (arm_p)
+                trailing_armed = pos['highest_price'] >= arm_p
+                hit_trailing = trailing_armed and (cur_p <= pos['highest_price'] * (1 - trailing_buffer / 100)) and (cur_p >= breakeven_p)
 
                 should_exit = False
                 exit_reason = ""
 
-                # Emite pensamentos periódicos de manutenção (Hold) com base na Linha de Meta
+                # Emite pensamentos periódicos de manutenção (Hold)
                 if (now - last_hold_thoughts.get(sym, 0)) >= 25.0:
                     last_hold_thoughts[sym] = now
                     dist_to_target = ((target_p - cur_p) / entry_p) * 100
@@ -458,7 +628,7 @@ class SniperTraderAgent:
                             "HOLD",
                             sym,
                             "MANTER",
-                            f"Mantendo {sym}: ACIMA DA LINHA DE META @ {cur_p} (+{pnl_pct:.2f}%). Alvo de lucro real atingido, trailing stop móvel ativo."
+                            f"Mantendo {sym}: ACIMA DA LINHA DE META @ {cur_p} (+{pnl_pct:.2f}%). Alvo superado, trailing stop móvel protegendo lucros."
                         )
                     else:
                         mode_label = "Hold Ilimitado" if in_grace_period else "Sessão Base"
@@ -466,34 +636,34 @@ class SniperTraderAgent:
                             "HOLD",
                             sym,
                             "MANTER",
-                            f"[{mode_label}] Mantendo {sym}: cotação @ {cur_p} ({pnl_pct:+.2f}%). Faltam {dist_to_target:.2f}% para a Meta ({target_p}). Mercado estagnado/lento: aguardando pacientemente."
+                            f"[{mode_label}] Mantendo {sym}: cotação @ {cur_p} ({pnl_pct:+.2f}%). Faltam {dist_to_target:.2f}% para a Meta ({target_p}). Stop dinâmico em -{dynamic_stop:.2f}%."
                         )
 
                 # REGRA DO INVESTIDOR:
                 # 1. Alvo de Lucro Real atingido (Meta / Trailing Stop)
                 if cur_p >= target_p and not hit_trailing:
-                    if pnl_pct >= 1.0:  # Rompimento expressivo da meta
+                    target_margin = pos.get('target_pct', 2.0) + 0.50
+                    if pnl_pct >= target_margin:  # Rompimento expressivo da meta
                         should_exit = True
-                        exit_reason = f"🎯 Linha de Meta Superada (+{pnl_pct:.2f}% | Alvo: {target_p})"
+                        exit_reason = f"🎯 Super Rompimento da Meta (+{pnl_pct:.2f}% | Alvo: {target_p})"
                 if hit_trailing:
                     should_exit = True
-                    exit_reason = f"🛡️ Trailing Stop na Meta (Lucro Real Protegido: +{pnl_pct:.2f}%)"
+                    exit_reason = f"🛡️ Trailing Stop na Meta (+{pnl_pct:.2f}% protegido)"
                     self.emit_thought(
                         "TRAILING",
                         sym,
                         "PROTEÇÃO",
                         f"Trailing Stop executado em {sym}! Lucro real de {pnl_pct:+.2f}% garantido acima da meta e das taxas."
                     )
-                # 2. Stop Loss de Proteção (-0.45%): ÚNICA regra de saída por perda
-                # Se o preço estiver estagnado ou subindo devagar, continua aguardando sem limite de tempo
-                elif pnl_pct <= -0.45:
+                # 2. Stop Loss Dinâmico de Volatilidade (ATR): ÚNICA regra de saída por perda
+                elif pnl_pct <= -dynamic_stop:
                     should_exit = True
-                    exit_reason = "🛑 Stop Loss de Proteção (-0.45%)"
+                    exit_reason = f"🛑 Stop Loss de Volatilidade ATR (-{dynamic_stop:.2f}%)"
                     self.emit_thought(
                         "STOP_LOSS",
                         sym,
                         "STOP LOSS",
-                        f"Stop Loss de proteção atingido em {sym} ({pnl_pct:+.2f}%). Encerrando posição para resguardar capital."
+                        f"Stop Loss de volatilidade atingido em {sym} ({pnl_pct:+.2f}% <= -{dynamic_stop:.2f}%). Encerrando posição para resguardar capital."
                     )
 
                 if should_exit:

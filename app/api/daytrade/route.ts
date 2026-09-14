@@ -29,7 +29,9 @@ export async function GET() {
       openPositionsRaw,
       botConfigRaw,
       chatRaw,
-      historyRaw
+      historyRaw,
+      sniperPolicyRaw,
+      btcMacroRaw
     ] = await Promise.all([
       redis.get<any>('daytrade:session'),
       redis.get<any>('daytrade:last_cycle_timestamp'),
@@ -42,6 +44,8 @@ export async function GET() {
       redis.get<any>('bot:config'),
       redis.lrange<any>('daytrade:chat', -100, -1),
       redis.lrange<any>('daytrade:history', 0, 19),
+      redis.get<any>('ai:sniper_policy'),
+      redis.get<any>('ai:btc_macro_regime'),
     ])
 
     const session = safeParse(sessionRaw, null)
@@ -54,6 +58,22 @@ export async function GET() {
     const botConfig = safeParse(botConfigRaw, { dry_run: false })
     const chatMessages = (chatRaw || []).map((m: any) => safeParse(m, {}))
     const daytradeHistory = (historyRaw || []).map((h: any) => safeParse(h, {}))
+    const sniperPolicy = safeParse(sniperPolicyRaw, {
+      risk_mode: 'balanced',
+      target_pct: 2.00,
+      trailing_arm_pct: 1.80,
+      trailing_buffer_pct: 0.40,
+      min_stop_pct: 1.20,
+      max_stop_pct: 2.00,
+      max_spread_pct: 0.08,
+      min_rvol: 1.5,
+      btc_macro_filter: true,
+    })
+    const btcMacroRegime = safeParse(btcMacroRaw, {
+      healthy: true,
+      regime: session?.btc_regime || 'NEUTRO',
+      reason: session?.btc_reason || 'Aguardando varredura',
+    })
 
     // Saldo disponível oficial
     const brlBalance = parseFloat(accountBalances.BRL || 0)
@@ -228,7 +248,9 @@ export async function GET() {
       },
       botConfig: {
         dry_run: botConfig.dry_run ?? false,
-      }
+      },
+      sniperPolicy,
+      btcMacroRegime,
     })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Erro ao consultar Daytrade' }, { status: 500 })

@@ -123,8 +123,26 @@ interface WalletAsset {
   canTrade: boolean
 }
 
+interface BtcMacroRegime {
+  healthy: boolean
+  regime: string
+  reason: string
+}
+
+interface SniperPolicy {
+  risk_mode: string
+  target_pct: number
+  trailing_arm_pct: number
+  trailing_buffer_pct: number
+  min_stop_pct: number
+  max_stop_pct: number
+  max_spread_pct: number
+  min_rvol: number
+  btc_macro_filter: boolean
+}
+
 export default function SniperDaytradePanel() {
-  const [capital, setCapital] = useState<number>(10)
+  const [capital, setCapital] = useState<number>(15)
   const [currency, setCurrency] = useState<'BRL' | 'USDT'>('USDT')
   const [sourceAsset, setSourceAsset] = useState<string>('BTC')
   const [walletAssets, setWalletAssets] = useState<WalletAsset[]>([])
@@ -156,6 +174,10 @@ export default function SniperDaytradePanel() {
   const [dailyReportFilter, setDailyReportFilter] = useState<'all' | 'profit' | 'loss'>('all')
   const [dailyReportSearch, setDailyReportSearch] = useState<string>('')
 
+  // Calibragem Adaptativa e Gatekeeper Macro BTC
+  const [btcMacroRegime, setBtcMacroRegime] = useState<BtcMacroRegime | null>(null)
+  const [sniperPolicy, setSniperPolicy] = useState<SniperPolicy | null>(null)
+
   // Polling dos dados da sessão a cada 3 segundos
   const fetchDaytradeState = useCallback(async () => {
     try {
@@ -183,6 +205,12 @@ export default function SniperDaytradePanel() {
       }
       if (data.botConfig) {
         setIsDryRun(data.botConfig.dry_run ?? false)
+      }
+      if (data.btcMacroRegime) {
+        setBtcMacroRegime(data.btcMacroRegime)
+      }
+      if (data.sniperPolicy) {
+        setSniperPolicy(data.sniperPolicy)
       }
 
       if (data.session?.status === 'pending') {
@@ -430,6 +458,43 @@ export default function SniperDaytradePanel() {
               DESATIVADO
             </span>
           )}
+        </div>
+      </div>
+
+      {/* BARRA DE POLÍTICA ADAPTATIVA DA IA & GATEKEEPER MACRO BTC */}
+      <div className="flex flex-wrap items-center gap-2 mb-5 p-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800/80 text-xs">
+        {/* BTC Macro Gatekeeper */}
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800">
+          <span className="text-neutral-400 font-bold uppercase text-[10px] tracking-wider">Gatekeeper BTC:</span>
+          {btcMacroRegime?.regime === 'ALTA' ? (
+            <span className="text-emerald-400 font-extrabold flex items-center gap-1" title={btcMacroRegime.reason}>
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span> ALTA (15m Favorável)
+            </span>
+          ) : btcMacroRegime?.regime === 'QUEDA' ? (
+            <span className="text-rose-400 font-extrabold flex items-center gap-1" title={btcMacroRegime.reason}>
+              <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span> QUEDA (Entradas Travadas)
+            </span>
+          ) : (
+            <span className="text-amber-300 font-extrabold flex items-center gap-1" title={btcMacroRegime?.reason || 'Consolidação'}>
+              <span className="w-2 h-2 rounded-full bg-amber-400"></span> CONSOLIDAÇÃO (Neutro)
+            </span>
+          )}
+        </div>
+
+        {/* Parâmetros Calibrados */}
+        <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 font-mono text-[11px] text-neutral-300 flex-wrap">
+          <span className="text-neutral-400 font-bold uppercase text-[10px]">Meta:</span>
+          <span className="text-emerald-400 font-bold">+{sniperPolicy?.target_pct ? sniperPolicy.target_pct.toFixed(2) : '2.00'}%</span>
+          <span className="text-neutral-600">|</span>
+          <span className="text-neutral-400 font-bold uppercase text-[10px]">Stop ATR:</span>
+          <span className="text-rose-400 font-bold">-{sniperPolicy?.min_stop_pct ? sniperPolicy.min_stop_pct.toFixed(2) : '1.20'}% a -{sniperPolicy?.max_stop_pct ? sniperPolicy.max_stop_pct.toFixed(2) : '2.00'}%</span>
+          <span className="text-neutral-600">|</span>
+          <span className="text-neutral-400 font-bold uppercase text-[10px]">Alocação:</span>
+          <span className="text-cyan-400 font-bold">100% no Ativo #1</span>
+        </div>
+
+        <div className="ml-auto text-[10px] text-neutral-500 font-mono hidden sm:block">
+          Spread Máx: &lt; {sniperPolicy?.max_spread_pct || 0.08}% • Foco: USDT
         </div>
       </div>
 
@@ -761,9 +826,10 @@ export default function SniperDaytradePanel() {
                   {(currency === 'BRL'
                     ? [10, 25, 50, 100]
                     : [
-                        Math.max(1, Math.min(2, Math.floor(availableBuyingPower))),
-                        Math.max(1, Math.min(5, Math.floor(availableBuyingPower))),
-                        Math.max(1, Math.min(10, Math.floor(availableBuyingPower))),
+                        15,
+                        25,
+                        50,
+                        100,
                         Math.max(1, Math.floor(availableBuyingPower)),
                       ]
                   )

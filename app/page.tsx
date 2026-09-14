@@ -233,18 +233,22 @@ export default async function DashboardPage() {
                     <p className="text-sm text-neutral-300 mb-3">{entry.news_summary}</p>
                     
                     {entry.news_sources && entry.news_sources.length > 0 && (
-                      <div className="mb-3 p-2 bg-neutral-900/50 border border-neutral-800 rounded text-xs text-neutral-400">
-                        <strong className="text-neutral-300 mb-1 block">Fontes Consultadas:</strong>
-                        <ul className="list-disc pl-4 space-y-1">
-                          {entry.news_sources.map((src: any, sIdx: number) => (
-                            <li key={sIdx}>
-                              <a href={src.url} target="_blank" rel="noopener noreferrer" className="hover:text-purple-400 underline decoration-neutral-600 underline-offset-2">
-                                {src.title}
-                              </a>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
+                      <details className="mb-3 group bg-neutral-900/50 border border-neutral-800 rounded text-xs text-neutral-400">
+                        <summary className="p-2 cursor-pointer font-bold text-neutral-300 hover:text-white transition-colors focus:outline-none">
+                          Fontes Consultadas ({entry.news_sources.length})
+                        </summary>
+                        <div className="p-2 pt-0 border-t border-neutral-800/50 mt-1">
+                          <ul className="list-disc pl-4 space-y-2 mt-2">
+                            {entry.news_sources.map((src: any, sIdx: number) => (
+                              <li key={sIdx}>
+                                <a href={src.url} target="_blank" rel="noopener noreferrer" className="hover:text-purple-400 underline decoration-neutral-600 underline-offset-2">
+                                  {src.title}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </details>
                     )}
 
                     {entry.learned_lessons && (

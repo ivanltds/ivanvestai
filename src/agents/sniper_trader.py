@@ -401,20 +401,21 @@ class SniperTraderAgent:
             now = time.time()
             elapsed_sec = int(now - started_at)
 
-            # A. Aos 10 minutos (600s), verifica se alguma posição ainda está abaixo da Linha de Meta (target_price)
+            # A. Aos 10 minutos (600s), se houver posições abaixo da meta, ativa o Modo Hold Ilimitado
             if elapsed_sec >= self.session_duration_sec and active_positions:
                 any_below_target = any(pos['current_price'] < pos['target_price'] for pos in active_positions.values())
                 if any_below_target and not in_grace_period:
                     in_grace_period = True
                     session_info["in_grace_period"] = True
+                    session_info["unlimited_hold"] = True
                     kv_db.update_daytrade_session(session_info)
                     self.emit_thought(
                         "PROTECTION",
-                        "ANTI-LOSS",
-                        "PROTEÇÃO",
-                        "Marca de 10 min atingida com posições abaixo da Linha de Meta. Ativando tolerância de +2min para buscar o alvo de lucro real antes de qualquer encerramento."
+                        "PACIÊNCIA",
+                        "HOLD ILIMITADO",
+                        "Marca de 10 min atingida com posições em andamento. Modo Ilimitado ativado: mantendo posições estagnadas ou em alta lenta sem encerramento por tempo. Venda somente na Linha de Meta (+0.70%) ou no Stop Loss de proteção (-0.45%)."
                     )
-                    print(f"[Sniper] ⏳ [10m ATINGIDO] Posição abaixo da Linha de Meta. Ativando Tolerância Anti-Loss (+2 min)...")
+                    print(f"[Sniper] ⏳ [10m ATINGIDO] Posições em andamento. Ativando MODO HOLD ILIMITADO: aguardando pacientemente alvo de lucro real. Sem encerramento por tempo!")
 
             # B. Monitoramento e Saída Individual de Cada Posição Ancorada na Linha de Meta
             symbols_to_close = []
@@ -458,14 +459,16 @@ class SniperTraderAgent:
                             f"Mantendo {sym}: ACIMA DA LINHA DE META @ {cur_p} (+{pnl_pct:.2f}%). Alvo de lucro real atingido, trailing stop móvel ativo."
                         )
                     else:
+                        mode_label = "Hold Ilimitado" if in_grace_period else "Sessão Base"
                         self.emit_thought(
                             "HOLD",
                             sym,
                             "MANTER",
-                            f"Mantendo {sym}: cotação @ {cur_p} ({pnl_pct:+.2f}%). Faltam {dist_to_target:.2f}% para atingir a Linha de Meta ({target_p}) com taxas cobertas."
+                            f"[{mode_label}] Mantendo {sym}: cotação @ {cur_p} ({pnl_pct:+.2f}%). Faltam {dist_to_target:.2f}% para a Meta ({target_p}). Mercado estagnado/lento: aguardando pacientemente."
                         )
 
-                # Regra: Vendas em 10 min acontecem apenas considerando a Linha de Meta
+                # REGRA DO INVESTIDOR:
+                # 1. Alvo de Lucro Real atingido (Meta / Trailing Stop)
                 if cur_p >= target_p and not hit_trailing:
                     if pnl_pct >= 1.0:  # Rompimento expressivo da meta
                         should_exit = True
@@ -479,18 +482,17 @@ class SniperTraderAgent:
                         "PROTEÇÃO",
                         f"Trailing Stop executado em {sym}! Lucro real de {pnl_pct:+.2f}% garantido acima da meta e das taxas."
                     )
-                elif pnl_pct <= -0.45 and not in_grace_period:
+                # 2. Stop Loss de Proteção (-0.45%): ÚNICA regra de saída por perda
+                # Se o preço estiver estagnado ou subindo devagar, continua aguardando sem limite de tempo
+                elif pnl_pct <= -0.45:
                     should_exit = True
                     exit_reason = "🛑 Stop Loss de Proteção (-0.45%)"
-                elif in_grace_period and cur_p >= target_p:
-                    should_exit = True
-                    exit_reason = f"🎯 Linha de Meta Atingida na Tolerância (+{pnl_pct:.2f}%)"
-                elif in_grace_period and cur_p >= breakeven_p:
-                    should_exit = True
-                    exit_reason = f"✅ Saída no Breakeven na Tolerância (Taxas Cobertas: +{pnl_pct:.2f}%)"
-                elif elapsed_sec >= (self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)):
-                    should_exit = True
-                    exit_reason = "⏰ Tempo Limite Esgotado (Hard Stop)"
+                    self.emit_thought(
+                        "STOP_LOSS",
+                        sym,
+                        "STOP LOSS",
+                        f"Stop Loss de proteção atingido em {sym} ({pnl_pct:+.2f}%). Encerrando posição para resguardar capital."
+                    )
 
                 if should_exit:
                     symbols_to_close.append((sym, cur_p, pnl_pct, exit_reason))
@@ -608,10 +610,9 @@ class SniperTraderAgent:
                 kv_db.save_daytrade_snapshot(snapshot)
                 print(f"[Sniper Snapshot {snapshot['elapsed_str']}] Posições Abertas: {len(active_positions)}/{len(all_session_positions)} | PnL Geral: {overall_pnl_pct:+.2f}%")
 
-            # E. Término da Sessão
-            max_allowed_time = self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)
-            if elapsed_sec >= max_allowed_time and len(active_positions) == 0:
-                print(f"[Sniper] 🏁 Todas as posições concluídas e tempo esgotado ({elapsed_sec}s).")
+            # E. Término da Sessão: conclui apenas quando TODAS as posições tiverem sido encerradas (por Meta ou Stop Loss)
+            if len(active_positions) == 0 and elapsed_sec >= 15:
+                print(f"[Sniper] 🏁 Todas as posições concluídas ({elapsed_sec}s decorridos). Encerrando sessão.")
                 break
 
             time.sleep(3)

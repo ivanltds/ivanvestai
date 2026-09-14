@@ -216,14 +216,11 @@ export default function SniperDaytradePanel() {
         setRemainingSessionSeconds(600 - elapsedSeconds)
         setInGracePeriod(false)
         setGraceSeconds(0)
-      } else if (elapsedSeconds < 720) {
+      } else {
+        // Modo Hold Ilimitado: tempo estendido sem limite enquanto houver posições em andamento
         setRemainingSessionSeconds(0)
         setInGracePeriod(true)
-        setGraceSeconds(720 - elapsedSeconds)
-      } else {
-        setRemainingSessionSeconds(0)
-        setGraceSeconds(0)
-        setInGracePeriod(false)
+        setGraceSeconds(elapsedSeconds - 600)
       }
     }
 
@@ -708,20 +705,20 @@ export default function SniperDaytradePanel() {
       {isRunning && (
         <div className="bg-gradient-to-br from-rose-950/40 via-neutral-950/80 to-neutral-900/60 border border-rose-500/50 rounded-xl p-5 mb-5 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-center">
-            {/* Relógio Regressivo Principal */}
+            {/* Relógio Regressivo Principal / Contador de Hold Ilimitado */}
             <div className="md:col-span-1 p-4 rounded-xl bg-neutral-950/90 border border-rose-500/30 text-center shadow-[inset_0_0_20px_rgba(244,63,94,0.1)]">
               <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-bold block mb-1">
-                {inGracePeriod ? 'Tolerância Anti-Loss' : 'Tempo Restante'}
+                {inGracePeriod ? 'Hold Ilimitado' : 'Tempo Restante'}
               </span>
               <span
                 className={`text-4xl font-extrabold font-mono tracking-tight ${
                   inGracePeriod ? 'text-amber-400 animate-pulse' : 'text-rose-400'
                 }`}
               >
-                {inGracePeriod ? formatTimer(graceSeconds) : formatTimer(remainingSessionSeconds)}
+                {inGracePeriod ? `+${formatTimer(graceSeconds)}` : formatTimer(remainingSessionSeconds)}
               </span>
               <span className="text-[10px] text-neutral-500 block mt-1">
-                {inGracePeriod ? 'Aguardando recuperação (+2m max)' : 'Janela total: 10:00 min'}
+                {inGracePeriod ? 'Aguardando Meta ou Stop Loss' : 'Janela inicial: 10:00 min'}
               </span>
             </div>
 
@@ -734,81 +731,86 @@ export default function SniperDaytradePanel() {
                 <span className="text-lg font-bold font-mono text-white">
                   {session?.source_asset || 'BTC'}
                 </span>
-                <span className="text-xs text-rose-400 font-mono font-bold">
-                  (Flash Liquidity)
+                <span className="text-xs text-neutral-500 font-mono">
+                  → {currency}
                 </span>
               </div>
-              <p className="text-xs text-neutral-400 font-mono mt-1">
-                Capital: {session?.currency === 'BRL' ? `R$ ${session?.capital?.toFixed(2)}` : `$${session?.capital?.toFixed(2)} USDT`}
-              </p>
-            </div>
-
-            {/* PnL Geral da Sessão */}
-            <div className="md:col-span-1 p-4 rounded-xl bg-neutral-950/90 border border-neutral-800">
-              <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-bold block mb-1">
-                Retorno Consolidado
-              </span>
-              <span
-                className={`text-2xl font-bold font-mono ${
-                  (session?.total_pnl_pct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                }`}
-              >
-                {(session?.total_pnl_pct || 0) >= 0 ? '+' : ''}
-                {(session?.total_pnl_pct || 0).toFixed(2)}%
-              </span>
               <span className="text-[10px] text-neutral-500 block mt-1">
-                Trailing Stop: +0.50% | Take Profit: +0.70%
+                {isDryRun ? 'Simulação' : 'Mercado Real'}
               </span>
             </div>
 
-            {/* Operações Concluídas */}
+            {/* PnL Geral Não-Realizado */}
             <div className="md:col-span-1 p-4 rounded-xl bg-neutral-950/90 border border-neutral-800">
               <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-bold block mb-1">
-                Micro-Trades Realizados
+                Retorno Não Realizado
               </span>
-              <span className="text-2xl font-bold font-mono text-white">
-                {session?.trades_count || 0}
-              </span>
+              <div className="flex items-baseline gap-2">
+                <span
+                  className={`text-2xl font-black font-mono tracking-tight ${
+                    (session?.total_pnl_pct || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {(session?.total_pnl_pct || 0) >= 0 ? '+' : ''}
+                  {(session?.total_pnl_pct || 0).toFixed(2)}%
+                </span>
+              </div>
               <span className="text-[10px] text-neutral-500 block mt-1">
-                Ativos ativos: {activePositionsList.length}
+                Capital Alocado: {capital} {currency}
+              </span>
+            </div>
+
+            {/* Posições Ativas Scanner */}
+            <div className="md:col-span-1 p-4 rounded-xl bg-neutral-950/90 border border-neutral-800">
+              <span className="text-[10px] uppercase tracking-wider text-neutral-400 font-bold block mb-1">
+                Posições Abertas
+              </span>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-black font-mono text-white">
+                  {activePositionsList.length}
+                </span>
+                <span className="text-xs text-neutral-500 font-mono">
+                  ativos simultâneos
+                </span>
+              </div>
+              <span className="text-[10px] text-neutral-500 block mt-1">
+                Gestão independente tick-a-tick
               </span>
             </div>
           </div>
 
-          {/* MULTI-ASSET CARDS: Exibe cada posição acompanhada de forma individual */}
+          {/* Cards Individuais de Cada Posição Ativa */}
           {activePositionsList.length > 0 && (
-            <div className="space-y-2 pt-2">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                Posições Acompanhadas Individualmente pelo Scanner
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="space-y-2 pt-2 border-t border-neutral-800/60">
+              <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider block">
+                Monitoramento das Cestas Ativas:
+              </span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {activePositionsList.map((pos) => {
-                  const isProfit = (pos.pnl_pct || 0) >= 0
+                  const pnl = pos.pnl_pct || 0
+                  const isPosProfit = pnl >= 0
                   return (
                     <div
                       key={pos.symbol}
-                      className="p-3 rounded-xl bg-neutral-950/80 border border-neutral-800 hover:border-neutral-700 transition-all space-y-1.5"
+                      className="p-3 bg-neutral-900/80 rounded-lg border border-neutral-800 flex items-center justify-between font-mono"
                     >
-                      <div className="flex justify-between items-center">
-                        <span className="font-extrabold text-sm text-white font-mono">{pos.symbol}</span>
-                        <span
-                          className={`text-xs font-bold font-mono px-2 py-0.5 rounded ${
-                            isProfit
-                              ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/50'
-                              : 'bg-rose-950/80 text-rose-400 border border-rose-800/50'
-                          }`}
-                        >
-                          {isProfit ? '+' : ''}{(pos.pnl_pct || 0).toFixed(2)}%
+                      <div>
+                        <span className="text-xs font-bold text-white block">{pos.symbol}</span>
+                        <span className="text-[10px] text-neutral-400">
+                          Entrada: {formatPrice(pos.entry_price, currency)}
                         </span>
                       </div>
-                      <div className="text-xs text-neutral-400 font-mono flex justify-between">
-                        <span>Entrada: {formatPrice(pos.entry_price, session?.currency)}</span>
-                        <span className="text-white">Atual: {formatPrice(pos.current_price, session?.currency)}</span>
-                      </div>
-                      <div className="text-[10px] text-neutral-500 flex justify-between items-center pt-1 border-t border-neutral-900">
-                        <span>Alocado: ${(pos.entry_cost || 0).toFixed(2)}</span>
-                        <span>{pos.trailing_active ? '⚡ Trailing Ativo' : '🎯 Alvo +0.7%'}</span>
+                      <div className="text-right">
+                        <span
+                          className={`text-xs font-bold ${
+                            isPosProfit ? 'text-emerald-400' : 'text-rose-400'
+                          }`}
+                        >
+                          {isPosProfit ? '+' : ''}{pnl.toFixed(2)}%
+                        </span>
+                        <span className="text-[10px] text-neutral-500 block">
+                          Atual: {formatPrice(pos.current_price, currency)}
+                        </span>
                       </div>
                     </div>
                   )
@@ -817,13 +819,13 @@ export default function SniperDaytradePanel() {
             </div>
           )}
 
-          {/* Banner de Tolerância se aplicável */}
+          {/* Banner de Hold Ilimitado se aplicável */}
           {inGracePeriod && (
             <div className="p-3 bg-amber-950/40 border border-amber-500/40 rounded-lg text-xs text-amber-200 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="text-base">🛡️</span>
                 <span>
-                  <strong>Regra de Proteção Ativa:</strong> Os 10 minutos se esgotaram com posições abertas. O robô está aguardando até 2 minutos adicionais para sair no breakeven ou com lucro antes de encerrar.
+                  <strong>Modo Hold Ilimitado Ativo:</strong> A janela inicial de 10 min se encerrou com posições abertas. O robô aguarda pacientemente ativos estagnados ou em alta lenta até alcançarem a <strong>Linha de Meta</strong>. Venda disparada apenas na Meta ou no Stop Loss de proteção.
                 </span>
               </div>
             </div>

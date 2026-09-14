@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import DaytradeChart from './DaytradeChart'
 
 interface SessionData {
   status: 'idle' | 'pending' | 'running' | 'completed' | 'cancelled'
@@ -68,6 +69,7 @@ export default function SniperDaytradePanel() {
   const [balances, setBalances] = useState<{ BRL: number; USDT: number }>({ BRL: 0, USDT: 0 })
   const [isDryRun, setIsDryRun] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<'chart' | 'table'>('chart')
 
   // Polling dos dados da sessão a cada 3 segundos
   const fetchDaytradeState = useCallback(async () => {
@@ -526,61 +528,99 @@ export default function SniperDaytradePanel() {
         </div>
       )}
 
-      {/* FEED DE STATUS A CADA 30 SEGUNDOS */}
+      {/* GRÁFICO E FEED DE STATUS A CADA 30 SEGUNDOS */}
       {snapshots.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-neutral-800/80">
-          <div className="flex justify-between items-center mb-3">
+        <div className="mt-4 pt-4 border-t border-neutral-800/80 space-y-3">
+          <div className="flex justify-between items-center mb-1 flex-wrap gap-2">
             <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400 flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>
-              Histórico de Status a cada 30 segundos ({snapshots.length} registros)
+              Histórico de Status (30s) — {snapshots.length} registros
             </h4>
-            <span className="text-[10px] text-neutral-500 font-mono">Atualização automática</span>
+
+            {/* Alternador Gráfico vs Tabela */}
+            <div className="flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5 text-[11px] font-mono">
+              <button
+                type="button"
+                onClick={() => setViewMode('chart')}
+                className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                  viewMode === 'chart'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                📊 Gráfico
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                  viewMode === 'table'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                📋 Tabela
+              </button>
+            </div>
           </div>
 
-          <div className="space-y-2 max-h-48 overflow-y-auto pr-1 custom-scrollbar">
-            {snapshots.map((snap, idx) => {
-              const isProfit = (snap.unrealized_pnl_pct || 0) >= 0
-              return (
-                <div
-                  key={idx}
-                  className="flex justify-between items-center p-2.5 rounded-lg bg-neutral-950/60 border border-neutral-800/60 text-xs font-mono hover:border-neutral-700 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-neutral-500 text-[11px]">
-                      {snap.timestamp ? new Date(snap.timestamp).toLocaleTimeString('pt-BR') : `T+${snap.seconds_elapsed}s`}
-                    </span>
-                    <span
-                      className={`px-2 py-0.5 text-[10px] font-bold rounded ${
-                        snap.in_position
-                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                          : 'bg-neutral-800 text-neutral-400'
-                      }`}
-                    >
-                      {snap.in_position ? 'POSICIONADO' : 'AGUARDANDO GATILHO'}
-                    </span>
-                    <span className="text-white font-semibold">
-                      {snap.current_price?.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </span>
-                  </div>
+          {/* MODO 1: GRÁFICO DE LINHA DINÂMICO */}
+          {viewMode === 'chart' && (
+            <DaytradeChart
+              snapshots={snapshots}
+              entryPrice={session?.entry_price}
+              inPosition={session?.in_position}
+              currency={currency}
+            />
+          )}
 
-                  <div className="flex items-center gap-4">
-                    {snap.rsi && (
-                      <span className="text-neutral-400 text-[11px]">
-                        RSI: <strong className="text-neutral-200">{snap.rsi.toFixed(1)}</strong>
+          {/* MODO 2: TABELA DE STATUS */}
+          {viewMode === 'table' && (
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+              {snapshots.map((snap, idx) => {
+                const isProfit = (snap.unrealized_pnl_pct || 0) >= 0
+                return (
+                  <div
+                    key={idx}
+                    className="flex justify-between items-center p-2.5 rounded-lg bg-neutral-950/60 border border-neutral-800/60 text-xs font-mono hover:border-neutral-700 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-neutral-500 text-[11px]">
+                        {snap.timestamp ? new Date(snap.timestamp).toLocaleTimeString('pt-BR') : `T+${snap.seconds_elapsed}s`}
                       </span>
-                    )}
-                    <span
-                      className={`font-bold ${
-                        snap.in_position ? (isProfit ? 'text-emerald-400' : 'text-rose-400') : 'text-neutral-500'
-                      }`}
-                    >
-                      PnL: {snap.in_position ? `${isProfit ? '+' : ''}${(snap.unrealized_pnl_pct || 0).toFixed(2)}%` : '0.00%'}
-                    </span>
+                      <span
+                        className={`px-2 py-0.5 text-[10px] font-bold rounded ${
+                          snap.in_position
+                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-neutral-800 text-neutral-400'
+                        }`}
+                      >
+                        {snap.in_position ? 'POSICIONADO' : 'AGUARDANDO GATILHO'}
+                      </span>
+                      <span className="text-white font-semibold">
+                        {snap.current_price?.toLocaleString('pt-BR', { style: 'currency', currency })}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      {snap.rsi && (
+                        <span className="text-neutral-400 text-[11px]">
+                          RSI: <strong className="text-neutral-200">{snap.rsi.toFixed(1)}</strong>
+                        </span>
+                      )}
+                      <span
+                        className={`font-bold ${
+                          snap.in_position ? (isProfit ? 'text-emerald-400' : 'text-rose-400') : 'text-neutral-500'
+                        }`}
+                      >
+                        PnL: {snap.in_position ? `${isProfit ? '+' : ''}${(snap.unrealized_pnl_pct || 0).toFixed(2)}%` : '0.00%'}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
     </section>

@@ -361,6 +361,9 @@ class SniperTraderAgent:
             }
             kv_db.record_daytrade_microtrade(buy_record)
 
+            breakeven_calc = round(cur_price * 1.002002, 8)
+            target_calc = round(cur_price * 1.0070, 8)
+
             active_positions[sym] = {
                 "symbol": sym,
                 "entry_price": cur_price,
@@ -371,7 +374,9 @@ class SniperTraderAgent:
                 "buy_timestamp": time.time(),
                 "buy_time": time.strftime("%H:%M:%S"),
                 "pnl_pct": 0.0,
-                "in_position": True
+                "in_position": True,
+                "breakeven_price": breakeven_calc,
+                "target_price": target_calc,
             }
 
         # 4. Loop de Gestão Concorrente / Assíncrona Tick-a-Tick (3s)
@@ -379,10 +384,10 @@ class SniperTraderAgent:
             now = time.time()
             elapsed_sec = int(now - started_at)
 
-            # A. Verifica se atingiu a marca de 10 minutos (600s) com alguma posição em loss
+            # A. Aos 10 minutos (600s), verifica se alguma posição ainda está abaixo da Linha de Meta (target_price)
             if elapsed_sec >= self.session_duration_sec and active_positions:
-                any_in_loss = any(pos['pnl_pct'] < 0 for pos in active_positions.values())
-                if any_in_loss and not in_grace_period:
+                any_below_target = any(pos['current_price'] < pos['target_price'] for pos in active_positions.values())
+                if any_below_target and not in_grace_period:
                     in_grace_period = True
                     session_info["in_grace_period"] = True
                     kv_db.update_daytrade_session(session_info)
@@ -390,11 +395,11 @@ class SniperTraderAgent:
                         "PROTECTION",
                         "ANTI-LOSS",
                         "PROTEÇÃO",
-                        "Os 10 minutos base se esgotaram com posições em oscilação negativa. Ativando tolerância anti-loss de +2min para buscar breakeven antes de encerrar."
+                        "Marca de 10 min atingida com posições abaixo da Linha de Meta. Ativando tolerância de +2min para buscar o alvo de lucro real antes de qualquer encerramento."
                     )
-                    print(f"[Sniper] ⏳ [10m ATINGIDO] Pelo menos uma posição em loss. Ativando Tolerância Anti-Loss (+2 min)...")
+                    print(f"[Sniper] ⏳ [10m ATINGIDO] Posição abaixo da Linha de Meta. Ativando Tolerância Anti-Loss (+2 min)...")
 
-            # B. Monitoramento e Saída Individual de Cada Posição
+            # B. Monitoramento e Saída Individual de Cada Posição Ancorada na Linha de Meta
             symbols_to_close = []
             for sym, pos in list(active_positions.items()):
                 try:
@@ -405,55 +410,63 @@ class SniperTraderAgent:
 
                 pos['current_price'] = cur_p
                 entry_p = pos['entry_price']
+                breakeven_p = pos.get('breakeven_price', entry_p * 1.002002)
+                target_p = pos.get('target_price', entry_p * 1.0070)
                 pnl_pct = ((cur_p - entry_p) / entry_p) * 100
                 pos['pnl_pct'] = round(pnl_pct, 2)
 
                 if cur_p > pos['highest_price']:
                     pos['highest_price'] = cur_p
 
-                # Trailing Stop individual (+0.50%)
-                hit_trailing = (pos['highest_price'] >= entry_p * 1.005) and (cur_p <= entry_p * 1.001)
+                # Trailing Stop arma somente após atingir a Linha de Meta (target_p)
+                trailing_armed = pos['highest_price'] >= target_p
+                hit_trailing = trailing_armed and (cur_p <= pos['highest_price'] * 0.9985) and (cur_p >= breakeven_p)
 
                 should_exit = False
                 exit_reason = ""
 
-                # Emite pensamentos periódicos de manutenção (Hold) a cada ~25 segundos
+                # Emite pensamentos periódicos de manutenção (Hold) com base na Linha de Meta
                 if (now - last_hold_thoughts.get(sym, 0)) >= 25.0:
                     last_hold_thoughts[sym] = now
-                    if pnl_pct >= 0:
-                        dist = max(0.0, 0.50 - pnl_pct)
+                    dist_to_target = ((target_p - cur_p) / entry_p) * 100
+                    if cur_p >= target_p:
                         self.emit_thought(
                             "HOLD",
                             sym,
                             "MANTER",
-                            f"Mantendo posição em {sym}: em lucro de +{pnl_pct:.2f}% (cotação @ {cur_p}). Faltam {dist:.2f}% para acionar a trava de Trailing Stop (+0.50%)."
+                            f"Mantendo {sym}: ACIMA DA LINHA DE META @ {cur_p} (+{pnl_pct:.2f}%). Alvo de lucro real atingido, trailing stop móvel ativo."
                         )
                     else:
                         self.emit_thought(
                             "HOLD",
                             sym,
                             "MANTER",
-                            f"Mantendo {sym}: oscilação controlada de {pnl_pct:.2f}% (cotação @ {cur_p}). Stop Loss curto e seguro em -0.45%."
+                            f"Mantendo {sym}: cotação @ {cur_p} ({pnl_pct:+.2f}%). Faltam {dist_to_target:.2f}% para atingir a Linha de Meta ({target_p}) com taxas cobertas."
                         )
 
-                if pnl_pct >= 0.70:
+                # Regra: Vendas em 10 min acontecem apenas considerando a Linha de Meta
+                if cur_p >= target_p and not hit_trailing:
+                    if pnl_pct >= 1.0:  # Rompimento expressivo da meta
+                        should_exit = True
+                        exit_reason = f"🎯 Linha de Meta Superada (+{pnl_pct:.2f}% | Alvo: {target_p})"
+                if hit_trailing:
                     should_exit = True
-                    exit_reason = "🎯 Take Profit (+0.70%)"
-                elif hit_trailing:
-                    should_exit = True
-                    exit_reason = "🛡️ Trailing Stop (Lucro Protegido)"
+                    exit_reason = f"🛡️ Trailing Stop na Meta (Lucro Real Protegido: +{pnl_pct:.2f}%)"
                     self.emit_thought(
                         "TRAILING",
                         sym,
                         "PROTEÇÃO",
-                        f"Gatilho de Trailing Stop atingido em {sym}! Encerrando com lucro de {pnl_pct:+.2f}% garantido."
+                        f"Trailing Stop executado em {sym}! Lucro real de {pnl_pct:+.2f}% garantido acima da meta e das taxas."
                     )
                 elif pnl_pct <= -0.45 and not in_grace_period:
                     should_exit = True
-                    exit_reason = "🛑 Stop Loss Curto (-0.45%)"
-                elif in_grace_period and pnl_pct >= 0.0:
+                    exit_reason = "🛑 Stop Loss de Proteção (-0.45%)"
+                elif in_grace_period and cur_p >= target_p:
                     should_exit = True
-                    exit_reason = "✅ Recuperação no Período de Tolerância (Breakeven)"
+                    exit_reason = f"🎯 Linha de Meta Atingida na Tolerância (+{pnl_pct:.2f}%)"
+                elif in_grace_period and cur_p >= breakeven_p:
+                    should_exit = True
+                    exit_reason = f"✅ Saída no Breakeven na Tolerância (Taxas Cobertas: +{pnl_pct:.2f}%)"
                 elif elapsed_sec >= (self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)):
                     should_exit = True
                     exit_reason = "⏰ Tempo Limite Esgotado (Hard Stop)"
@@ -540,10 +553,24 @@ class SniperTraderAgent:
                     "in_position": len(active_positions) > 0,
                     "current_price": primary_price,
                     "entry_price": primary_pos['entry_price'] if primary_pos else None,
+                    "breakeven_price": primary_pos.get('breakeven_price', round(primary_pos['entry_price'] * 1.002002, 8)) if primary_pos else None,
+                    "target_price": primary_pos.get('target_price', round(primary_pos['entry_price'] * 1.0070, 8)) if primary_pos else None,
                     "unrealized_pnl_pct": overall_pnl_pct,
                     "unrealized_pct": overall_pnl_pct,
                     "active_coins_count": len(active_positions),
                     "positions_summary": {k: v['pnl_pct'] for k, v in active_positions.items()},
+                    "positions_data": {
+                        sym: {
+                            "symbol": sym,
+                            "current_price": pos['current_price'],
+                            "entry_price": pos['entry_price'],
+                            "breakeven_price": pos.get('breakeven_price', round(pos['entry_price'] * 1.002002, 8)),
+                            "target_price": pos.get('target_price', round(pos['entry_price'] * 1.0070, 8)),
+                            "pnl_pct": pos['pnl_pct'],
+                            "is_above_target": pos['current_price'] >= pos.get('target_price', pos['entry_price'] * 1.0070)
+                        }
+                        for sym, pos in active_positions.items()
+                    },
                     "in_grace_period": in_grace_period
                 }
                 kv_db.save_daytrade_snapshot(snapshot)

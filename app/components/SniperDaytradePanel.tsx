@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import DaytradeChart from './DaytradeChart'
+import SniperChatFeed, { ChatMessage } from './SniperChatFeed'
 
 interface ActivePosition {
   symbol: string
@@ -12,6 +13,26 @@ interface ActivePosition {
   highest_price: number
   trailing_active: boolean
   pnl_pct: number
+}
+
+interface SessionOutcome {
+  status?: string
+  initial_capital?: number
+  final_capital?: number
+  net_profit_fiat?: number
+  net_pnl_fiat?: number
+  pnl_pct?: number
+  total_pnl_pct?: number
+  total_trades?: number
+  trades_count?: number
+  winning_trades?: number
+  losing_trades?: number
+  win_rate_pct?: number
+  duration_str?: string
+  result_status?: 'PROFIT' | 'LOSS'
+  source_asset?: string
+  currency?: string
+  finished_at?: string
 }
 
 interface SessionData {
@@ -34,6 +55,7 @@ interface SessionData {
   in_grace_period?: boolean
   positions?: Record<string, ActivePosition>
   allocated_targets?: Array<{ symbol: string; capital: number; min_cost: number }>
+  summary?: SessionOutcome
 }
 
 interface Snapshot {
@@ -90,6 +112,8 @@ export default function SniperDaytradePanel() {
   const [estimatedWaitSeconds, setEstimatedWaitSeconds] = useState<number>(0)
   const [snapshots, setSnapshots] = useState<Snapshot[]>([])
   const [microtrades, setMicrotrades] = useState<MicroTrade[]>([])
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [daytradeHistory, setDaytradeHistory] = useState<SessionOutcome[]>([])
   const [loading, setLoading] = useState<boolean>(false)
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState<number>(600)
   const [graceSeconds, setGraceSeconds] = useState<number>(0)
@@ -104,7 +128,7 @@ export default function SniperDaytradePanel() {
   })
   const [isDryRun, setIsDryRun] = useState<boolean>(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'chart' | 'table'>('chart')
+  const [viewMode, setViewMode] = useState<'chat' | 'chart' | 'table'>('chat')
 
   // Polling dos dados da sessão a cada 3 segundos
   const fetchDaytradeState = useCallback(async () => {
@@ -116,6 +140,12 @@ export default function SniperDaytradePanel() {
       setSnapshots(data.snapshots || [])
       setMicrotrades(data.microtrades || [])
 
+      if (data.chatMessages) {
+        setChatMessages(data.chatMessages)
+      }
+      if (data.daytradeHistory) {
+        setDaytradeHistory(data.daytradeHistory)
+      }
       if (data.balances) {
         setBalances(data.balances)
       }
@@ -223,6 +253,7 @@ export default function SniperDaytradePanel() {
         setErrorMessage(data.error || 'Falha ao solicitar sessão')
       } else {
         await fetchDaytradeState()
+        setViewMode('chat') // Mostra o chat da IA imediatamente
       }
     } catch (e: any) {
       setErrorMessage(e?.message || 'Erro ao iniciar Daytrade')
@@ -258,7 +289,7 @@ export default function SniperDaytradePanel() {
 
   const formatPrice = (val?: number, curr = 'USDT') => {
     if (!val || isNaN(val)) return curr === 'USDT' ? '$ 0,00' : 'R$ 0,00'
-    const decimals = val < 0.001 ? 8 : val < 1 ? 4 : 2
+    const decimals = Math.abs(val) < 0.001 ? 8 : Math.abs(val) < 1 ? 4 : 2
     if (curr === 'USDT' || curr === 'USD') {
       return `$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: decimals })} USDT`
     }
@@ -292,6 +323,9 @@ export default function SniperDaytradePanel() {
   const activePositionsMap = session?.positions || {}
   const activePositionsList = Object.values(activePositionsMap)
 
+  // Resultado da última sessão (quanto ganhou ou perdeu)
+  const lastOutcome: SessionOutcome | null = session?.summary || (daytradeHistory.length > 0 ? daytradeHistory[0] : null)
+
   return (
     <section className="bg-neutral-900/60 rounded-2xl border border-rose-950/40 p-6 backdrop-blur-md relative overflow-hidden shadow-[0_0_40px_rgba(244,63,94,0.05)]">
       {/* Luz neon de fundo sutil */}
@@ -313,7 +347,7 @@ export default function SniperDaytradePanel() {
               </h2>
             </div>
             <p className="text-xs text-neutral-400">
-              Varredura algorítmica de altcoins voláteis (PEPE, NEAR, DOGE, SUI) com distribuição de capital e trailing stop individual
+              Varredura algorítmica de altcoins voláteis com justificativas de decisão e aprendizado contínuo da IA
             </p>
           </div>
         </div>
@@ -341,6 +375,106 @@ export default function SniperDaytradePanel() {
           )}
         </div>
       </div>
+
+      {/* CARD DE RESULTADO PÓS-TRADE (QUANTO GANHOU OU PERDEU) */}
+      {lastOutcome && !isRunning && (
+        <div
+          className={`p-5 rounded-xl border relative overflow-hidden mb-5 transition-all ${
+            (lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0
+              ? 'bg-gradient-to-br from-emerald-950/40 via-neutral-950 to-neutral-900/90 border-emerald-500/50 shadow-[0_0_30px_rgba(16,185,129,0.1)]'
+              : 'bg-gradient-to-br from-rose-950/40 via-neutral-950 to-neutral-900/90 border-rose-500/50 shadow-[0_0_30px_rgba(244,63,94,0.1)]'
+          }`}
+        >
+          <div className="flex justify-between items-start flex-wrap gap-3 mb-3">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xl">
+                  {(lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0 ? '🏆' : '🛡️'}
+                </span>
+                <h3 className="text-sm font-extrabold font-mono uppercase tracking-wider text-white">
+                  {(lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0
+                    ? 'Resultado da Sessão: Lucro Realizado!'
+                    : 'Resultado da Sessão: Proteção Acionada'}
+                </h3>
+              </div>
+              <p className="text-xs text-neutral-400">
+                Sessão finalizada • Capital e retorno recompostos na carteira em{' '}
+                <strong className="text-white font-mono">{lastOutcome.source_asset || 'USDT'}</strong>
+              </p>
+            </div>
+            <span
+              className={`px-3 py-1 rounded-full text-xs font-mono font-extrabold border ${
+                (lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+              }`}
+            >
+              {(lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0 ? 'WIN (+)' : 'LOSS (-)'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 rounded-lg bg-neutral-950/80 border border-neutral-800">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                {(lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0 ? 'Ganho Líquido' : 'Perda Líquida'}
+              </span>
+              <span
+                className={`text-xl font-extrabold font-mono ${
+                  (lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0
+                    ? 'text-emerald-400'
+                    : 'text-rose-400'
+                }`}
+              >
+                {(lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0) >= 0 ? '+' : ''}
+                {formatPrice(
+                  lastOutcome.net_profit_fiat || lastOutcome.net_pnl_fiat || 0,
+                  lastOutcome.currency || 'USDT'
+                )}
+              </span>
+              <span className="text-[11px] text-neutral-500 font-mono block mt-0.5">
+                ({(lastOutcome.pnl_pct || lastOutcome.total_pnl_pct || 0) >= 0 ? '+' : ''}
+                {(lastOutcome.pnl_pct || lastOutcome.total_pnl_pct || 0).toFixed(2)}%)
+              </span>
+            </div>
+
+            <div className="p-3 rounded-lg bg-neutral-950/80 border border-neutral-800">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                Capital Inicial ➔ Final
+              </span>
+              <span className="text-sm font-bold font-mono text-white">
+                {formatPrice(lastOutcome.initial_capital || 0, lastOutcome.currency || 'USDT')}
+              </span>
+              <span className="text-[11px] text-neutral-400 font-mono block mt-0.5">
+                ➔ Final: {formatPrice(lastOutcome.final_capital || 0, lastOutcome.currency || 'USDT')}
+              </span>
+            </div>
+
+            <div className="p-3 rounded-lg bg-neutral-950/80 border border-neutral-800">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                Estatísticas de Trades
+              </span>
+              <span className="text-sm font-bold font-mono text-white">
+                {lastOutcome.total_trades || lastOutcome.trades_count || 0} operações
+              </span>
+              <span className="text-[11px] text-emerald-400 font-mono block mt-0.5">
+                Taxa de Acerto: {lastOutcome.win_rate_pct || 0}%
+              </span>
+            </div>
+
+            <div className="p-3 rounded-lg bg-neutral-950/80 border border-neutral-800">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                Ativo de Liquidez
+              </span>
+              <span className="text-sm font-bold font-mono text-amber-400">
+                {lastOutcome.source_asset || 'USDT'}
+              </span>
+              <span className="text-[11px] text-neutral-400 font-mono block mt-0.5">
+                Saldo na carteira
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ÁREA DE CONTROLE (QUANDO OCIOSO OU COMPLETADO) */}
       {!isRunning && !isPending && (
@@ -697,56 +831,83 @@ export default function SniperDaytradePanel() {
         </div>
       )}
 
-      {/* GRÁFICO E FEED DE STATUS A CADA 30 SEGUNDOS */}
-      {snapshots.length > 0 && (
-        <div className="mt-4 pt-4 border-t border-neutral-800/80 space-y-3">
-          <div className="flex justify-between items-center mb-1 flex-wrap gap-2">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400 flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>
-              Histórico de Status (30s) — {snapshots.length} registros
+      {/* SEÇÃO DINÂMICA: CHAT DA IA, GRÁFICO E TABELA DE STATUS */}
+      <div className="mt-4 pt-4 border-t border-neutral-800/80 space-y-3">
+        <div className="flex justify-between items-center mb-1 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
+            <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-300">
+              Painel de Observações & Inteligência do Day Trade
             </h4>
-
-            {/* Alternador Gráfico vs Tabela */}
-            <div className="flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5 text-[11px] font-mono">
-              <button
-                type="button"
-                onClick={() => setViewMode('chart')}
-                className={`px-2.5 py-1 rounded-md font-bold transition-all ${
-                  viewMode === 'chart'
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                    : 'text-neutral-400 hover:text-white'
-                }`}
-              >
-                📊 Gráfico
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('table')}
-                className={`px-2.5 py-1 rounded-md font-bold transition-all ${
-                  viewMode === 'table'
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                    : 'text-neutral-400 hover:text-white'
-                }`}
-              >
-                📋 Tabela
-              </button>
-            </div>
           </div>
 
-          {/* MODO 1: GRÁFICO DE LINHA DINÂMICO */}
-          {viewMode === 'chart' && (
-            <DaytradeChart
-              snapshots={snapshots}
-              entryPrice={session?.entry_price}
-              inPosition={session?.in_position}
-              currency={currency}
-            />
-          )}
+          {/* Alternador de Visualização: Chat, Gráfico, Tabela */}
+          <div className="flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5 text-[11px] font-mono">
+            <button
+              type="button"
+              onClick={() => setViewMode('chat')}
+              className={`px-3 py-1 rounded-md font-bold transition-all flex items-center gap-1.5 ${
+                viewMode === 'chat'
+                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              <span>💬 Chat da IA</span>
+              {chatMessages.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-neutral-800 text-[10px] text-neutral-300 font-bold">
+                  {chatMessages.length}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('chart')}
+              className={`px-3 py-1 rounded-md font-bold transition-all ${
+                viewMode === 'chart'
+                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              📊 Gráfico
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1 rounded-md font-bold transition-all ${
+                viewMode === 'table'
+                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  : 'text-neutral-400 hover:text-white'
+              }`}
+            >
+              📋 Tabela ({snapshots.length})
+            </button>
+          </div>
+        </div>
 
-          {/* MODO 2: TABELA DE STATUS */}
-          {viewMode === 'table' && (
-            <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
-              {snapshots.map((snap, idx) => {
+        {/* MODO 1: CHAT AO VIVO DA IA COM JUSTIFICATIVAS */}
+        {viewMode === 'chat' && (
+          <SniperChatFeed messages={chatMessages} isRunning={isRunning} />
+        )}
+
+        {/* MODO 2: GRÁFICO DE LINHA DINÂMICO */}
+        {viewMode === 'chart' && (
+          <DaytradeChart
+            snapshots={snapshots}
+            entryPrice={session?.entry_price}
+            inPosition={session?.in_position}
+            currency={currency}
+          />
+        )}
+
+        {/* MODO 3: TABELA DE STATUS */}
+        {viewMode === 'table' && (
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+            {snapshots.length === 0 ? (
+              <div className="p-8 text-center text-neutral-500 text-xs font-mono">
+                Nenhum snapshot registrado ainda na sessão atual.
+              </div>
+            ) : (
+              snapshots.map((snap, idx) => {
                 const isProfit = (snap.unrealized_pnl_pct || 0) >= 0
                 return (
                   <div
@@ -787,11 +948,11 @@ export default function SniperDaytradePanel() {
                     </div>
                   </div>
                 )
-              })}
-            </div>
-          )}
-        </div>
-      )}
+              })
+            )}
+          </div>
+        )}
+      </div>
 
       {/* HISTÓRICO DE MICRO-TRADES EXECUTADOS */}
       {microtrades.length > 0 && (

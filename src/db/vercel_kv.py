@@ -451,5 +451,49 @@ class KVDatabase:
         encoded = urllib.parse.quote(json.dumps(session), safe='')
         self._execute_command("set", "daytrade:session", encoded)
 
+    def append_daytrade_chat(self, message: dict):
+        """Salva uma mensagem no chat em tempo real do Day Trade (retém até 200 mensagens)."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(message), safe='')
+        self._execute_command("rpush", "daytrade:chat", encoded)
+        self._execute_command("ltrim", "daytrade:chat", "-200", "-1")
+
+    def get_daytrade_chat(self, limit: int = 100) -> list:
+        """Puxa as últimas mensagens do chat do Day Trade."""
+        import urllib.parse
+        data = self._execute_command("lrange", "daytrade:chat", f"-{limit}", "-1")
+        if data and isinstance(data, list):
+            res = []
+            for item in data:
+                try:
+                    decoded = urllib.parse.unquote(item) if isinstance(item, str) else item
+                    res.append(json.loads(decoded) if isinstance(decoded, str) else decoded)
+                except:
+                    pass
+            return res
+        return []
+
+    def save_daytrade_session_history(self, summary: dict):
+        """Salva o sumário pós-trade no histórico permanente de Day Trade para a IA aprender."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(summary), safe='')
+        self._execute_command("lpush", "daytrade:history", encoded)
+        self._execute_command("ltrim", "daytrade:history", "0", "49")
+
+    def get_daytrade_history(self, limit: int = 10) -> list:
+        """Retorna as últimas sessões concluídas de Day Trade."""
+        import urllib.parse
+        data = self._execute_command("lrange", "daytrade:history", "0", str(limit - 1))
+        if data and isinstance(data, list):
+            res = []
+            for item in data:
+                try:
+                    decoded = urllib.parse.unquote(item) if isinstance(item, str) else item
+                    res.append(json.loads(decoded) if isinstance(decoded, str) else decoded)
+                except:
+                    pass
+            return res
+        return []
+
 kv_db = KVDatabase()
 

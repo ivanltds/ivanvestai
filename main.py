@@ -207,8 +207,15 @@ def main():
     recent_logs = kv_db.get_audit_logs(limit=10)
     kv_db.sync_with_binance()
     open_positions_memory = kv_db.get_open_positions()
+    daytrade_history = kv_db.get_daytrade_history(limit=5)
+    daytrade_chat = kv_db.get_daytrade_chat(limit=20)
 
-    learned_lessons = ag1_5.generate_lessons(recent_logs, open_positions_memory)
+    learned_lessons = ag1_5.generate_lessons(
+        recent_logs,
+        open_positions_memory,
+        daytrade_history=daytrade_history,
+        daytrade_chat=daytrade_chat
+    )
     
     # 3. Gestor de Portfólio (Lê da Memória)
     ag3 = PortfolioManagerAgent()

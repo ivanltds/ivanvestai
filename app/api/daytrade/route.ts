@@ -26,7 +26,9 @@ export async function GET() {
       tradesRaw,
       accountBalancesRaw,
       openPositionsRaw,
-      botConfigRaw
+      botConfigRaw,
+      chatRaw,
+      historyRaw
     ] = await Promise.all([
       redis.get<any>('daytrade:session'),
       redis.get<any>('daytrade:last_cycle_timestamp'),
@@ -36,6 +38,8 @@ export async function GET() {
       redis.get<any>('portfolio:account_balances'),
       redis.get<any>('portfolio:open_positions'),
       redis.get<any>('bot:config'),
+      redis.lrange<any>('daytrade:chat', -100, -1),
+      redis.lrange<any>('daytrade:history', 0, 9),
     ])
 
     const session = safeParse(sessionRaw, null)
@@ -46,6 +50,8 @@ export async function GET() {
     const accountBalances = safeParse(accountBalancesRaw, {})
     const openPositions = safeParse(openPositionsRaw, {})
     const botConfig = safeParse(botConfigRaw, { dry_run: false })
+    const chatMessages = (chatRaw || []).map((m: any) => safeParse(m, {}))
+    const daytradeHistory = (historyRaw || []).map((h: any) => safeParse(h, {}))
 
     // Saldo disponível oficial
     const brlBalance = parseFloat(accountBalances.BRL || 0)
@@ -118,6 +124,8 @@ export async function GET() {
       microtrades,
       serverTime: now,
       walletAssets,
+      chatMessages,
+      daytradeHistory,
       balances: {
         BRL: brlBalance,
         USDT: usdtBalance,
@@ -214,11 +222,24 @@ export async function POST(req: NextRequest) {
         duration_minutes: 10,
       }
 
+      const startMsg = {
+        id: `chat_${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        elapsed_sec: 0,
+        elapsed_str: "00:00",
+        type: "SYSTEM",
+        symbol: "SESSÃO",
+        tag: "SISTEMA",
+        message: `⚡ Nova solicitação de Day Trade: $${capital.toFixed(2)} ${currency} financiado via ${sourceAsset}. Aguardando próximo ciclo de varredura.`,
+        sender: "Ivanvest AI"
+      }
+
       await Promise.all([
         redis.set('daytrade:session', JSON.stringify(session)),
         redis.del('daytrade:snapshots'),
         redis.del('daytrade:microtrades'),
         redis.del('daytrade:trades'),
+        redis.rpush('daytrade:chat', JSON.stringify(startMsg)),
       ])
       return NextResponse.json({ success: true, session })
     } else if (action === 'cancel') {

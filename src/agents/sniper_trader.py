@@ -33,6 +33,28 @@ class SniperTraderAgent:
         self.grace_period_sec = 120       # +2 minutos de tolerância anti-loss
         self.snapshot_interval_sec = 30   # Snapshots a cada 30s
         self.liquidity_rotation = None
+        self.started_at = None
+
+    def emit_thought(self, msg_type: str, symbol: str, tag: str, message: str):
+        """Emite uma observação ou justificativa no chat em tempo real e persiste no Redis."""
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        elapsed = int(time.time() - self.started_at) if hasattr(self, 'started_at') and self.started_at else 0
+        chat_item = {
+            "id": f"chat_{int(time.time() * 1000)}",
+            "timestamp": now_ts,
+            "elapsed_sec": elapsed,
+            "elapsed_str": f"{elapsed // 60:02d}:{elapsed % 60:02d}",
+            "type": msg_type,
+            "symbol": symbol,
+            "tag": tag,
+            "message": message,
+            "sender": "Sniper AI Agent"
+        }
+        try:
+            kv_db.append_daytrade_chat(chat_item)
+        except Exception as e:
+            print(f"[Sniper Chat Error] {e}")
+        print(f"[Sniper Chat | {tag}] {symbol}: {message}")
 
     def fetch_1m_ta(self, symbol: str) -> dict:
         """Coleta as últimas velas de 1m e calcula indicadores rápidos (Bollinger, RSI-7, VWAP)."""
@@ -240,6 +262,7 @@ class SniperTraderAgent:
         self.session_duration_sec = duration_minutes * 60
         session_info = kv_db.get_daytrade_session() or {}
         started_at = time.time()
+        self.started_at = started_at
         
         iso_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         session_info["started_at"] = iso_now
@@ -248,6 +271,13 @@ class SniperTraderAgent:
         session_info["in_grace_period"] = False
         session_info["positions"] = {}
         kv_db.start_daytrade_session(session_info)
+
+        self.emit_thought(
+            "SYSTEM",
+            "SESSÃO",
+            "SISTEMA",
+            f"Sessão Sniper de 10 min iniciada! Capital: {self.capital:.2f} {self.currency} financiado via {self.source_asset}."
+        )
 
         print(f"\n========================================================")
         print(f"  [SNIPER DAY TRADE MULTI-ATIVO] Sessão Iniciada!")
@@ -258,6 +288,13 @@ class SniperTraderAgent:
 
         # 1. Conversão Flash de Liquidez se originar de crypto (ex: BTC)
         self.execute_flash_liquidity()
+        if self.source_asset in ['BTC', 'ETH', 'SOL', 'BNB']:
+            self.emit_thought(
+                "SYSTEM",
+                self.source_asset,
+                "LIQUIDEZ",
+                f"Liquidez instantânea Flash ativada: alocando fração de {self.source_asset} para caçar altcoins de alta volatilidade."
+            )
 
         # 2. Scanner de Oportunidades
         scored = self.scan_opportunities()
@@ -266,10 +303,17 @@ class SniperTraderAgent:
         print(f"\n[Sniper Alocação] Capital distribuído entre {len(allocated_targets)} ativos:")
         for t in allocated_targets:
             print(f"  ➔ {t['symbol']}: {t['allocated_capital']:.2f} {self.currency} (Lote Mín: ${t['min_cost']})")
+            self.emit_thought(
+                "SCAN",
+                t['symbol'],
+                "SCANNER",
+                f"Oportunidade selecionada: {t['symbol']} com Volatilidade 10m de {t.get('range_10m_pct', 0.8):.2f}% e RSI-7 em {t.get('rsi7', 50):.1f}. Setup: {t.get('setup', 'Scalping')} (Score: {t.get('score', 30):.1f}). Alocação: ${t['allocated_capital']:.2f} {self.currency}."
+            )
 
         active_positions = {}  # { symbol: position_data }
         trades_history = []
         last_snapshot_time = 0.0
+        last_hold_thoughts = {}
         session_capital = self.capital
         in_grace_period = False
 
@@ -293,6 +337,13 @@ class SniperTraderAgent:
                         self.exchange.create_market_buy_order(sym, None, params={'quoteOrderQty': trade_cost})
                     except Exception as e2:
                         print(f"[Sniper Disparo] Aviso Binance em {sym}: {e2}")
+
+            self.emit_thought(
+                "BUY",
+                sym,
+                "COMPRA",
+                f"Compra a mercado executada em {sym} @ {cur_price} (${trade_cost:.2f}). Justificativa: setup técnico {t['setup']} com aceleração de volatilidade."
+            )
 
             buy_record = {
                 "action": "BUY",
@@ -335,6 +386,12 @@ class SniperTraderAgent:
                     in_grace_period = True
                     session_info["in_grace_period"] = True
                     kv_db.update_daytrade_session(session_info)
+                    self.emit_thought(
+                        "PROTECTION",
+                        "ANTI-LOSS",
+                        "PROTEÇÃO",
+                        "Os 10 minutos base se esgotaram com posições em oscilação negativa. Ativando tolerância anti-loss de +2min para buscar breakeven antes de encerrar."
+                    )
                     print(f"[Sniper] ⏳ [10m ATINGIDO] Pelo menos uma posição em loss. Ativando Tolerância Anti-Loss (+2 min)...")
 
             # B. Monitoramento e Saída Individual de Cada Posição
@@ -360,12 +417,37 @@ class SniperTraderAgent:
                 should_exit = False
                 exit_reason = ""
 
+                # Emite pensamentos periódicos de manutenção (Hold) a cada ~25 segundos
+                if (now - last_hold_thoughts.get(sym, 0)) >= 25.0:
+                    last_hold_thoughts[sym] = now
+                    if pnl_pct >= 0:
+                        dist = max(0.0, 0.50 - pnl_pct)
+                        self.emit_thought(
+                            "HOLD",
+                            sym,
+                            "MANTER",
+                            f"Mantendo posição em {sym}: em lucro de +{pnl_pct:.2f}% (cotação @ {cur_p}). Faltam {dist:.2f}% para acionar a trava de Trailing Stop (+0.50%)."
+                        )
+                    else:
+                        self.emit_thought(
+                            "HOLD",
+                            sym,
+                            "MANTER",
+                            f"Mantendo {sym}: oscilação controlada de {pnl_pct:.2f}% (cotação @ {cur_p}). Stop Loss curto e seguro em -0.45%."
+                        )
+
                 if pnl_pct >= 0.70:
                     should_exit = True
                     exit_reason = "🎯 Take Profit (+0.70%)"
                 elif hit_trailing:
                     should_exit = True
                     exit_reason = "🛡️ Trailing Stop (Lucro Protegido)"
+                    self.emit_thought(
+                        "TRAILING",
+                        sym,
+                        "PROTEÇÃO",
+                        f"Gatilho de Trailing Stop atingido em {sym}! Encerrando com lucro de {pnl_pct:+.2f}% garantido."
+                    )
                 elif pnl_pct <= -0.45 and not in_grace_period:
                     should_exit = True
                     exit_reason = "🛑 Stop Loss Curto (-0.45%)"
@@ -396,6 +478,13 @@ class SniperTraderAgent:
                 fee = (pos['entry_cost'] + (sell_qty * cur_p)) * 0.001
                 net_pnl = gross_pnl - fee
                 session_capital += net_pnl
+
+                self.emit_thought(
+                    "SELL",
+                    sym,
+                    "VENDA",
+                    f"Ordem de venda executada em {sym} @ {cur_p} com resultado de {pnl_pct:+.2f}% ({net_pnl:+.2f} {self.currency}). Motivo: {exit_reason}."
+                )
 
                 sell_record = {
                     "action": "SELL",
@@ -478,23 +567,40 @@ class SniperTraderAgent:
         total_net_pnl = round(sum(t.get("net_pnl_fiat", 0) for t in trades_history), 2)
         total_pnl_pct = round((total_net_pnl / self.capital) * 100, 2) if self.capital > 0 else 0.0
         actual_duration_min = round((time.time() - started_at) / 60, 1)
+        result_status = "PROFIT" if total_net_pnl >= 0 else "LOSS"
 
         summary = {
+            "status": "completed",
             "source_asset": self.source_asset,
             "initial_capital": self.capital,
             "final_capital": round(session_capital, 2),
             "currency": self.currency,
             "net_profit_fiat": total_net_pnl,
+            "net_pnl_fiat": total_net_pnl,
             "pnl_pct": total_pnl_pct,
+            "total_pnl_pct": total_pnl_pct,
             "total_trades": total_trades,
+            "trades_count": total_trades,
             "winning_trades": winning_trades,
             "losing_trades": total_trades - winning_trades,
             "win_rate_pct": win_rate,
             "duration_str": f"{actual_duration_min} min",
-            "in_grace_period_used": in_grace_period
+            "in_grace_period_used": in_grace_period,
+            "result_status": result_status,
+            "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         }
 
+        kv_db.save_daytrade_session_history(summary)
         kv_db.finish_daytrade_session(summary)
+
+        outcome_msg = (
+            f"🏁 Sessão Sniper Finalizada! Resultado: {total_net_pnl:+.2f} {self.currency} ({total_pnl_pct:+.2f}%). "
+            f"Total de {total_trades} micro-trades realizados ({win_rate}% taxa de acerto). "
+            f"Capital Inicial: {self.capital:.2f} {self.currency} ➔ Final: {session_capital:.2f} {self.currency}. "
+            f"Liquidez e lucro recompostos em {self.source_asset}."
+        )
+        self.emit_thought("OUTCOME", "FINAL", "RESULTADO", outcome_msg)
+
         print(f"\n========================================================")
         print(f"  [SNIPER FINALIZADO] Lucro Líquido: {total_net_pnl:+.2f} {self.currency} ({total_pnl_pct:+.2f}%)")
         print(f"  Trades: {total_trades} | Taxa de Acerto: {win_rate}% | Duração: {actual_duration_min}m")

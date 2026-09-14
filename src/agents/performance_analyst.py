@@ -10,35 +10,55 @@ class PerformanceAnalystAgent:
     def __init__(self):
         self.llm = get_llm_provider()
 
-    def generate_lessons(self, audit_logs: list, open_positions: dict) -> str:
+    def generate_lessons(
+        self,
+        audit_logs: list,
+        open_positions: dict,
+        daytrade_history: list = None,
+        daytrade_chat: list = None
+    ) -> str:
         """
-        Gera conselhos baseados nos acertos/erros recentes.
+        Gera conselhos e lições contínuas baseadas nos acertos/erros recentes de DCA e Day Trade Sniper.
         """
-        if not audit_logs or not open_positions:
+        if not audit_logs and not open_positions and not daytrade_history:
             return "Ainda não há histórico suficiente para extrair lições. Siga as regras padrão."
 
-        print("[Agente 1.5] Analisando histórico para gerar lições aprendidas...")
+        print("[Agente 1.5] Analisando histórico de DCA e Day Trade Sniper para gerar lições aprendidas...")
         
         system_prompt = """
-        Você é o Chefe de Otimização e Aprendizado de um Fundo Quantitativo.
-        Seu objetivo é analisar as últimas operações e o status atual da carteira
+        Você é o Chefe de Otimização e Aprendizado de um Fundo Quantitativo com foco em Swing Trade (DCA) e Day Trade Sniper de Alta Frequência.
+        Seu objetivo é analisar as operações recentes de carteira E os resultados e justificativas do Day Trade Sniper
         para deduzir o que deu certo e o que deu errado.
         
         Você deve extrair no MÁXIMO 2 lições práticas e diretas de uma linha.
         Exemplos de Saída Esperada:
-        - "Na última hora compramos XRP após um falso rompimento; seja mais rigoroso com altcoins hoje."
-        - "O ativo XYZ está dando prejuízo persistente; considere realizar o prejuízo se houver nova queda."
+        - "No day trade recente com PEPE (+0.85%), o setup de rompimento de VWAP funcionou perfeitamente; priorize moedas com range > 1.0%."
+        - "A tolerância anti-loss evitou prejuízo desnecessário no minuto final; mantenha saídas no breakeven para preservar capital."
+        - "O ativo XYZ está dando prejuízo persistente no DCA; considere rebalancear para Bitcoin se houver fraqueza."
         
-        Retorne APENAS o texto das lições em plain text (sem JSON). Se estiver tudo tranquilo, 
+        Retorne APENAS o texto das lições em plain text (sem JSON). Se estiver tudo dentro do esperado, 
         diga: "Mantenha a estratégia atual, sem erros críticos recentes."
         """
         
+        # Filtra pensamentos de decisão relevantes do chat
+        recent_thoughts = []
+        if daytrade_chat:
+            for m in daytrade_chat[-15:]:
+                if isinstance(m, dict) and m.get('tag') in ['COMPRA', 'VENDA', 'RESULTADO', 'SCANNER']:
+                    recent_thoughts.append(f"[{m.get('tag')}] {m.get('symbol')}: {m.get('message')}")
+
         user_prompt = f"""
-        Histórico Recente (Logs):
-        {json.dumps(audit_logs[:10])}
+        Histórico Recente de Swing Trade / DCA (Logs):
+        {json.dumps(audit_logs[:10] if audit_logs else [])}
         
-        Posições Abertas Atuais (PnL):
-        {json.dumps(open_positions)}
+        Posições Abertas Atuais na Carteira (PnL):
+        {json.dumps(open_positions if open_positions else {})}
+
+        Histórico Recente do Day Trade Sniper (Lucro/Prejuízo/Setups):
+        {json.dumps(daytrade_history[:5] if daytrade_history else [])}
+
+        Observações e Justificativas de Decisão do Sniper (Chat da IA):
+        {json.dumps(recent_thoughts)}
         """
         
         response_text = self.llm.generate_response(
@@ -49,3 +69,4 @@ class PerformanceAnalystAgent:
         
         print(f"[Agente 1.5] Lição Aprendida: {response_text.strip()}")
         return response_text.strip()
+

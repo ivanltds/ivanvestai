@@ -27,16 +27,19 @@ class PortfolioManagerAgent:
                 ticker = self.exchange.fetch_ticker(symbol)
                 current_price = ticker['last']
                 
-                # Pegar velas para o ATR
-                bars = self.exchange.fetch_ohlcv(symbol, timeframe='1d', limit=14)
-                if len(bars) > 10:
+                # Pegar velas para o ATR (precisa de >14 candles para ATR-14)
+                bars = self.exchange.fetch_ohlcv(symbol, timeframe='1d', limit=30)
+                if len(bars) > 15:
                     df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
                     latest_atr = df.iloc[-1]['atr']
-                    # O "safe_stop_pct" é calculado como: (ATR / Preço Atual) * 2 (duas vezes a volatilidade diária)
-                    # Limitamos entre 5% e 25% para não ficar irreal.
-                    atr_pct = (latest_atr / current_price) * 100 * 2
-                    safe_stop_pct = max(5.0, min(25.0, atr_pct))
+                    if latest_atr is not None and not pd.isna(latest_atr) and current_price > 0:
+                        # O "safe_stop_pct" é calculado como: (ATR / Preço Atual) * 2 (duas vezes a volatilidade diária)
+                        # Limitamos entre 5% e 25% para não ficar irreal.
+                        atr_pct = (float(latest_atr) / current_price) * 100 * 2
+                        safe_stop_pct = max(5.0, min(25.0, atr_pct))
+                    else:
+                        safe_stop_pct = 10.0
                 else:
                     safe_stop_pct = 10.0 # Fallback default
                 
@@ -117,7 +120,30 @@ class PortfolioManagerAgent:
         try:
             data = json.loads(response_text)
             print(f"[Agente 3] Veredito do Gestor: {data.get('reasoning')}")
-            return data.get("final_trades", [])
+            final_trades = data.get("final_trades", [])
         except json.JSONDecodeError:
             print("[Agente 3] Erro: IA falhou na gestão de risco. Bloqueando operações.")
-            return []
+            final_trades = []
+
+        # Garantia absoluta: Se o humano definiu uma diretriz explícita de compra,
+        # o Gestor de Portfólio não pode descartar o ativo solicitado!
+        if user_directives:
+            user_dir_lower = user_directives.lower()
+            if any(w in user_dir_lower for w in ["compre", "comprar", "buy", "acumular", "aporte"]):
+                COIN_MAP = {
+                    "bitcoin": "BTC", "btc": "BTC", "ethereum": "ETH", "eth": "ETH",
+                    "solana": "SOL", "sol": "SOL", "usdt": "USDT", "dolar": "USDT", "dólar": "USDT"
+                }
+                for name, ticker in COIN_MAP.items():
+                    if name in user_dir_lower:
+                        if not any(t.get("symbol", "").split("/")[0] == ticker and t.get("action") == "BUY" for t in final_trades):
+                            print(f"[Agente 3] [OVERRIDE HUMANO] Forçando aprovação de compra para {ticker} por diretriz direta: '{user_directives}'")
+                            final_trades.append({
+                                "symbol": f"{ticker}/BRL",
+                                "action": "BUY",
+                                "is_memecoin": False
+                            })
+                        break
+
+        return final_trades
+

@@ -41,18 +41,26 @@ def execute_order(order, exchange):
         ticker = exchange.fetch_ticker(symbol)
         price = ticker['last']
         
+        base_asset = symbol.split('/')[0] if '/' in symbol else symbol
+        quote_asset = symbol.split('/')[1] if '/' in symbol else "BRL"
+        
         if action == 'BUY':
-            crypto_qty = fiat_amount / price
+            raw_qty = fiat_amount / price
+            try:
+                crypto_qty = float(exchange.amount_to_precision(symbol, raw_qty))
+            except:
+                crypto_qty = round(raw_qty, 6)
             is_dry_run = order.get('dry_run', True)
             if is_dry_run:
-                print(f"[DRY_RUN] SIMULADO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL")
+                print(f"[DRY_RUN] SIMULADO: Compra de {crypto_qty} {symbol} por {fiat_amount} {quote_asset}")
             else:
-                print(f"[LIVE] EXECUTANDO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL")
-                exchange.create_market_buy_order(symbol, crypto_qty)
+                print(f"[LIVE] EXECUTANDO: Compra de {crypto_qty} {symbol} por {fiat_amount} {quote_asset}")
+                try:
+                    exchange.create_market_buy_order(symbol, crypto_qty)
+                except Exception as buy_err:
+                    print(f"[LIVE] Tentando compra com quoteOrderQty ({fiat_amount} {quote_asset}): {buy_err}")
+                    exchange.create_market_buy_order(symbol, None, params={'quoteOrderQty': fiat_amount})
             kv_db.register_buy(symbol, crypto_qty, fiat_amount)
-            
-            base_asset = symbol.split('/')[0] if '/' in symbol else symbol
-            quote_asset = symbol.split('/')[1] if '/' in symbol else "BRL"
             
             return {
                 "symbol": symbol,

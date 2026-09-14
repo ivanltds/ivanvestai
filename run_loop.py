@@ -18,11 +18,12 @@ if __name__ == "__main__":
     print(f"==================================================\n")
 
     cycle_count = 1
+    import subprocess
     while True:
         now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         print(f"\n[{now_str}] >>> DISPARANDO CICLO #{cycle_count} <<<")
         try:
-            main()
+            subprocess.run([sys.executable, "main.py"], check=False)
         except Exception as e:
             print(f"[{now_str}] Erro inesperado no ciclo #{cycle_count}: {e}")
 

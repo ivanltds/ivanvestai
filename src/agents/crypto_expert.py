@@ -56,18 +56,26 @@ class CryptoExpertAgent:
         
         # Mapa de nomes completos para tickers oficiais da Binance
         NAME_TO_TICKER = {
-            "BITCOIN": "BTC", "ETHEREUM": "ETH", "ETHER": "ETH",
-            "SOLANA": "SOL", "CARDANO": "ADA", "RIPPLE": "XRP",
-            "DOGECOIN": "DOGE", "SHIBA INU": "SHIB", "SHIBA": "SHIB",
-            "POLKADOT": "DOT", "AVALANCHE": "AVAX", "CHAINLINK": "LINK",
-            "LITECOIN": "LTC", "BINANCE COIN": "BNB", "BNBCOIN": "BNB",
-            "UNISWAP": "UNI", "POLYGON": "MATIC", "NEAR PROTOCOL": "NEAR",
-            "NEAR": "NEAR", "APTOS": "APT", "ARBITRUM": "ARB",
-            "OPTIMISM": "OP", "CELESTIA": "TIA", "INJECTIVE": "INJ",
+            "BITCOIN": "BTC", "BTC": "BTC", "ETHEREUM": "ETH", "ETHER": "ETH", "ETH": "ETH",
+            "SOLANA": "SOL", "SOL": "SOL", "CARDANO": "ADA", "ADA": "ADA", "RIPPLE": "XRP", "XRP": "XRP",
+            "DOGECOIN": "DOGE", "DOGE": "DOGE", "SHIBA INU": "SHIB", "SHIBA": "SHIB", "SHIB": "SHIB",
+            "POLKADOT": "DOT", "DOT": "DOT", "AVALANCHE": "AVAX", "AVAX": "AVAX", "CHAINLINK": "LINK", "LINK": "LINK",
+            "LITECOIN": "LTC", "LTC": "LTC", "BINANCE COIN": "BNB", "BNBCOIN": "BNB", "BNB": "BNB",
+            "UNISWAP": "UNI", "UNI": "UNI", "POLYGON": "MATIC", "MATIC": "MATIC", "NEAR PROTOCOL": "NEAR",
+            "NEAR": "NEAR", "APTOS": "APT", "APT": "APT", "ARBITRUM": "ARB", "ARB": "ARB",
+            "OPTIMISM": "OP", "OP": "OP", "CELESTIA": "TIA", "TIA": "TIA", "INJECTIVE": "INJ", "INJ": "INJ",
             "SUI": "SUI", "PEPE": "PEPE", "FLOKI": "FLOKI",
-            "USD COIN": "USDC", "TETHER": "USDT", "TONCOIN": "TON",
-            "USDT": "USDT", "USDC": "USDC", "DOLAR": "USDT", "DÓLAR": "USDT", "DOLLAR": "USDT",
+            "USD COIN": "USDC", "USDC": "USDC", "TETHER": "USDT", "USDT": "USDT", "TONCOIN": "TON", "TON": "TON",
+            "DOLAR": "USDT", "DÓLAR": "USDT", "DOLLAR": "USDT",
         }
+
+        # Se houver diretriz humana citando moedas, garanta que elas estejam na lista de avaliação técnica
+        if user_directives:
+            user_dir_upper = user_directives.upper()
+            for name, ticker in NAME_TO_TICKER.items():
+                if name in user_dir_upper:
+                    if not any(c.get("coin", "").upper() == ticker for c in candidates):
+                        candidates.append({"coin": ticker, "sentiment": "bullish (Diretriz Humana Obrigatória)"})
 
         for coin_info in candidates:
             raw_name = coin_info.get("coin", "").upper().strip()
@@ -122,7 +130,27 @@ class CryptoExpertAgent:
         
         try:
             data = json.loads(response_text)
-            return data.get("approved_trades", [])
+            approved = data.get("approved_trades", [])
         except json.JSONDecodeError:
             print("[Agente 2] Erro: IA falhou ao gerar os tickers.")
-            return []
+            approved = []
+
+        # Garantia absoluta: Se o humano definiu uma diretriz explícita de compra no painel de comando,
+        # o comitê DEVE obedecer e nunca descartar o ativo solicitado!
+        if user_directives:
+            user_dir_lower = user_directives.lower()
+            if any(w in user_dir_lower for w in ["compre", "comprar", "buy", "acumular", "aporte"]):
+                for name, ticker in NAME_TO_TICKER.items():
+                    if name.lower() in user_dir_lower:
+                        if not any(t.get("symbol", "").split("/")[0] == ticker for t in approved):
+                            print(f"[Agente 2] [OVERRIDE HUMANO] Inserindo {ticker} obrigatoriamente por diretriz direta: '{user_directives}'")
+                            approved.append({
+                                "symbol": f"{ticker}/{self.currency}",
+                                "is_memecoin": False,
+                                "confidence": 99,
+                                "reason": f"Diretriz Humana de Prioridade Máxima: {user_directives}"
+                            })
+                        break
+
+        return approved
+

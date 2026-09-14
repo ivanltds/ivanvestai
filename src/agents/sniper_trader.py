@@ -507,8 +507,14 @@ class SniperTraderAgent:
 
                 if not self.dry_run:
                     try:
-                        prec_qty = float(self.exchange.amount_to_precision(sym, sell_qty))
+                        base_asset = sym.split('/')[0]
+                        # Consulta saldo livre real na Binance para evitar rejeição por desconto de taxa de compra
+                        bal = self.exchange.fetch_balance()
+                        free_bal = float(bal.get('free', {}).get(base_asset, 0.0))
+                        actual_sell_qty = min(sell_qty, free_bal) if free_bal > 0 else sell_qty
+                        prec_qty = float(self.exchange.amount_to_precision(sym, actual_sell_qty))
                         self.exchange.create_market_sell_order(sym, prec_qty)
+                        sell_qty = prec_qty
                     except Exception as e:
                         print(f"[Sniper Saída] Falha na ordem Binance para {sym}: {e}")
 

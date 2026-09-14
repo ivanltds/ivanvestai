@@ -142,16 +142,6 @@ interface SniperPolicy {
   btc_macro_filter: boolean
 }
 
-interface SniperAutoConfig {
-  enabled: boolean
-  interval_minutes: number
-  capital: number
-  currency: string
-  source_asset: string
-  last_run_timestamp?: number | null
-  nextAutoTriggerSeconds?: number
-}
-
 export default function SniperDaytradePanel() {
   const [capital, setCapital] = useState<number>(15)
   const [currency, setCurrency] = useState<'BRL' | 'USDT'>('USDT')
@@ -189,18 +179,6 @@ export default function SniperDaytradePanel() {
   const [btcMacroRegime, setBtcMacroRegime] = useState<BtcMacroRegime | null>(null)
   const [sniperPolicy, setSniperPolicy] = useState<SniperPolicy | null>(null)
 
-  // Configurações do Modo Autônomo (Disparo a cada 1 hora)
-  const [autoConfig, setAutoConfig] = useState<SniperAutoConfig>({
-    enabled: true,
-    interval_minutes: 60,
-    capital: 15,
-    currency: 'USDT',
-    source_asset: 'USDT',
-    nextAutoTriggerSeconds: 0,
-  })
-  const [autoToggling, setAutoToggling] = useState<boolean>(false)
-  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
-
   // Polling dos dados da sessão a cada 3 segundos
   const fetchDaytradeState = useCallback(async () => {
     try {
@@ -234,9 +212,6 @@ export default function SniperDaytradePanel() {
       }
       if (data.sniperPolicy) {
         setSniperPolicy(data.sniperPolicy)
-      }
-      if (data.autoConfig) {
-        setAutoConfig(data.autoConfig)
       }
 
       if (data.session?.status === 'pending') {
@@ -374,61 +349,6 @@ export default function SniperDaytradePanel() {
     }
   }
 
-  // Alternar Flag do Modo Autônomo a cada 1 hora
-  const handleToggleAuto = async (newEnabled: boolean) => {
-    setAutoToggling(true)
-    try {
-      const res = await fetch('/api/daytrade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update_auto_config',
-          enabled: newEnabled,
-          capital: autoConfig.capital || 15,
-          currency: 'USDT',
-          source_asset: 'USDT',
-          interval_minutes: 60,
-        }),
-      })
-      const data = await res.json()
-      if (data.autoConfig) {
-        setAutoConfig(data.autoConfig)
-      }
-    } catch (e) {
-      console.error('Erro ao alternar modo autônomo:', e)
-    } finally {
-      setAutoToggling(false)
-    }
-  }
-
-  // Salvar ajustes das configurações autônomas
-  const handleSaveAutoSettings = async (newCapital: number, intervalMinutes = 60) => {
-    setAutoToggling(true)
-    try {
-      const res = await fetch('/api/daytrade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update_auto_config',
-          enabled: autoConfig.enabled,
-          capital: newCapital,
-          currency: 'USDT',
-          source_asset: 'USDT',
-          interval_minutes: intervalMinutes,
-        }),
-      })
-      const data = await res.json()
-      if (data.autoConfig) {
-        setAutoConfig(data.autoConfig)
-        setIsSettingsOpen(false)
-      }
-    } catch (e) {
-      console.error('Erro ao salvar configurações autônomas:', e)
-    } finally {
-      setAutoToggling(false)
-    }
-  }
-
   const formatTimer = (totalSec: number) => {
     const m = Math.floor(Math.max(0, totalSec) / 60)
     const s = Math.max(0, totalSec) % 60
@@ -540,38 +460,6 @@ export default function SniperDaytradePanel() {
             </span>
           )}
         </div>
-      </div>
-
-      {/* STATUS DO MODO AUTÔNOMO HORÁRIO & LINK PARA CONFIGURAÇÕES */}
-      <div className="flex justify-between items-center flex-wrap gap-2 mb-4 px-4 py-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800 text-xs">
-        <div className="flex items-center gap-2.5">
-          <span className={`w-2.5 h-2.5 rounded-full ${autoConfig.enabled ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)] animate-pulse' : 'bg-neutral-600'}`}></span>
-          <span className="text-neutral-400 font-semibold">Sniper Autônomo (Ciclo 1h):</span>
-          {autoConfig.enabled ? (
-            <span className="text-emerald-400 font-mono font-bold flex items-center gap-1.5">
-              <span>ATIVADO</span>
-              <span className="text-neutral-600">•</span>
-              <span className="text-neutral-300">
-                {autoConfig.nextAutoTriggerSeconds && autoConfig.nextAutoTriggerSeconds > 0
-                  ? `Próximo disparo em ~${Math.ceil(autoConfig.nextAutoTriggerSeconds / 60)} min`
-                  : 'Pronto para o próximo ciclo'} (${autoConfig.capital || 15} USDT)
-              </span>
-            </span>
-          ) : (
-            <span className="text-neutral-500 font-mono">
-              PAUSADO (Desativado nas Configurações)
-            </span>
-          )}
-        </div>
-
-        <Link
-          href="/settings"
-          className="px-3 py-1.5 rounded-lg bg-neutral-900 border border-neutral-700 hover:border-emerald-500 hover:text-white text-neutral-300 flex items-center gap-1.5 transition-colors text-xs font-semibold"
-          title="Clique para ir às Configurações e alterar a flag ou o capital"
-        >
-          <span>⚙️</span>
-          <span>Configurações do Robô</span>
-        </Link>
       </div>
 
       {/* BARRA DE POLÍTICA ADAPTATIVA DA IA & GATEKEEPER MACRO BTC */}

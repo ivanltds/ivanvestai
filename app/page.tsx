@@ -109,18 +109,39 @@ export default async function DashboardPage() {
               {Object.keys(openPositions).length === 0 && (
                 <p className="text-neutral-500 italic">Carteira vazia no momento.</p>
               )}
-              {Object.entries(openPositions).map(([symbol, data]: [string, any]) => (
-                <div key={symbol} className="flex justify-between items-center p-3 rounded-lg bg-neutral-900 border border-neutral-800/50">
-                  <div>
-                    <p className="font-bold text-white">{symbol}</p>
-                    <p className="text-xs text-neutral-500">{data.total_coins.toFixed(6)} moedas</p>
+              {Object.entries(openPositions).map(([symbol, data]: [string, any]) => {
+                const currentPrice = data.current_price || data.avg_price || 0;
+                const lastPrice = data.last_price || currentPrice;
+                
+                const pnlPercentage = data.avg_price > 0 ? ((currentPrice - data.avg_price) / data.avg_price) * 100 : 0;
+                const isProfiting = pnlPercentage >= 0;
+                
+                // Setas indicando se subiu ou caiu desde a última execução
+                const wentUp = currentPrice >= lastPrice;
+
+                return (
+                  <div key={symbol} className="flex justify-between items-center p-3 rounded-lg bg-neutral-900 border border-neutral-800/50">
+                    <div>
+                      <p className="font-bold text-white flex items-center gap-2">
+                        {symbol} 
+                        <span className="text-xs" title={wentUp ? "Subiu desde a última execução" : "Caiu desde a última execução"}>
+                          {wentUp ? '🟢 ⬆️' : '🔴 ⬇️'}
+                        </span>
+                      </p>
+                      <p className="text-xs text-neutral-500">{data.total_coins.toFixed(6)} moedas</p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`font-mono text-sm ${isProfiting ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {formatCurrency(currentPrice * data.total_coins)}
+                      </p>
+                      <div className="text-xs text-neutral-500 flex flex-col gap-0.5 mt-1">
+                        <p>PM: {formatCurrency(data.avg_price)}</p>
+                        <p>Atual: {formatCurrency(currentPrice)} <span className={isProfiting ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>({pnlPercentage > 0 ? '+' : ''}{pnlPercentage.toFixed(2)}%)</span></p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="font-mono text-sm text-emerald-400">{formatCurrency(data.total_invested)}</p>
-                    <p className="text-xs text-neutral-500">PM: {formatCurrency(data.avg_price)}</p>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </section>
         </div>

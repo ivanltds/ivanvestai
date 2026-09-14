@@ -124,21 +124,46 @@ class KVDatabase:
         Sincroniza a memória com o saldo real da Binance.
         Isso corrige divergências por conta de taxas da corretora
         e ajusta o Preço Médio (PM) para a realidade matemática.
+        Atualiza também o Preço Atual e Preço Anterior para o Dashboard.
         """
         positions = self.get_open_positions()
         synced = False
         
+        # 1. Buscar preços atuais na Binance para as moedas em memória
+        tickers = {}
+        if positions:
+            try:
+                import ccxt
+                exchange = ccxt.binance({'enableRateLimit': True})
+                # Evita chamadas inválidas buscando 1 por 1 ou fetch_tickers se suportado
+                for symbol in positions.keys():
+                    try:
+                        ticker = exchange.fetch_ticker(symbol)
+                        tickers[symbol] = ticker['last']
+                    except:
+                        pass
+            except Exception as e:
+                print(f"[DB] Aviso: Não foi possível buscar cotações para PnL: {e}")
+        
         for symbol in list(positions.keys()):
+            # Atualiza histórico de preço para a Seta de Tendência e PnL Real
+            if symbol in tickers:
+                new_price = tickers[symbol]
+                old_price = positions[symbol].get('current_price', new_price)
+                positions[symbol]['last_price'] = old_price
+                positions[symbol]['current_price'] = new_price
+                synced = True
+
             # O symbol na Binance geralmente vem como 'BTC', no bot salvamos 'BTC/BRL'
             base_coin = symbol.split('/')[0] if '/' in symbol else symbol
             
             if base_coin in real_balances and real_balances[base_coin] > 0.00001:
                 # Atualiza a quantidade exata de moedas que temos (pós-taxas)
                 real_qty = real_balances[base_coin]
-                if positions[symbol]['total_coins'] != real_qty:
+                if positions[symbol].get('total_coins', 0) != real_qty:
                     positions[symbol]['total_coins'] = real_qty
                     # Recalcula o Preço Médio com base na quantidade real
-                    positions[symbol]['avg_price'] = positions[symbol]['total_invested'] / real_qty
+                    positions[symbol]['avg_price'] = positions[symbol].get('total_invested', 0) / real_qty
                     synced = True
             else:
                 # Se não temos mais saldo na Binance, remove da memória (Zero Dust)
@@ -149,7 +174,7 @@ class KVDatabase:
             import urllib.parse
             encoded_val = urllib.parse.quote(json.dumps(positions), safe='')
             self._execute_command("set", "portfolio:open_positions", encoded_val)
-            print("[DB] Sincronização com a Binance concluída. Preços Médios ajustados!")
+            print("[DB] Sincronização com a Binance concluída. Preços Médios e Atuais ajustados!")
 
     def save_market_sentiment(self, is_bullish: bool, summary: str):
         """Salva o status do 'Fear & Greed' baseado na IA de notícias."""

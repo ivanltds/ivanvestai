@@ -330,12 +330,9 @@ export default async function DashboardPage() {
         {/* COLUNA 2 (DIREITA: 60% / lg:col-span-7) */}
         <div className="lg:col-span-7 space-y-6">
           <CurrentDaytradeSession />
-        </div>
 
-      </div>
-
-      {/* SEÇÃO INFERIOR: DIÁRIO DE BORDO & AUDIT LOG DO FUNDO (100% LARGURA) */}
-      <section className="bg-neutral-900/60 rounded-2xl border border-neutral-800/80 p-6 backdrop-blur-md mb-12">
+          {/* DIÁRIO DE BORDO & AUDIT LOG DO FUNDO */}
+          <section className="bg-neutral-900/60 rounded-2xl border border-neutral-800/80 p-5 backdrop-blur-md">
         <div className="flex items-center justify-between pb-4 border-b border-neutral-800/80 mb-6">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-neutral-800 border border-neutral-700 text-neutral-300">
@@ -542,6 +539,8 @@ export default async function DashboardPage() {
           )}
         </div>
       </section>
+    </div>
+  </div>
 
       {/* SALA DE COMANDO FLUTUANTE (FAB + DRAWER) */}
       <FloatingCommandRoom />

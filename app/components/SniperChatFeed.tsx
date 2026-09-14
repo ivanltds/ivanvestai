@@ -1,6 +1,18 @@
 'use client'
 
 import React, { useState, useEffect, useRef } from 'react'
+import {
+  Bot,
+  ArrowUpRight,
+  ArrowDownRight,
+  Clock,
+  Search,
+  Shield,
+  Award,
+  MessageSquare,
+  Target,
+  Terminal,
+} from 'lucide-react'
 
 export interface ChatMessage {
   id?: string
@@ -64,43 +76,45 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
     }
   }
 
-  const getIcon = (tag?: string) => {
+  const renderIcon = (tag?: string) => {
     switch (tag) {
       case 'COMPRA':
-        return '🚀'
+        return <ArrowUpRight className="w-3 h-3 text-emerald-400" />
       case 'VENDA':
-        return '🏁'
+        return <ArrowDownRight className="w-3 h-3 text-rose-400" />
       case 'MANTER':
-        return '⏳'
+        return <Clock className="w-3 h-3 text-sky-400" />
       case 'SCANNER':
-        return '🔍'
+        return <Search className="w-3 h-3 text-purple-400" />
       case 'PROTEÇÃO':
-        return '🛡️'
+        return <Shield className="w-3 h-3 text-amber-400" />
       case 'RESULTADO':
-        return '🏆'
+        return <Award className="w-3 h-3 text-emerald-400" />
       default:
-        return '💬'
+        return <MessageSquare className="w-3 h-3 text-neutral-400" />
     }
   }
 
   return (
     <div className="bg-neutral-950/70 border border-neutral-800/80 rounded-xl p-4 flex flex-col h-80">
       {/* Header do Chat */}
-      <div className="flex justify-between items-center pb-3 border-b border-neutral-850 flex-wrap gap-2">
+      <div className="flex justify-between items-center pb-3 border-b border-neutral-800/80 flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-base">🤖</span>
+          <div className="p-1.5 rounded-lg bg-neutral-900 border border-neutral-800 text-purple-400">
+            <Bot className="w-4 h-4" />
+          </div>
           <div>
             <h4 className="text-xs font-bold text-white font-mono flex items-center gap-2">
-              Chat & Raciocínio do Sniper AI
+              Feed &amp; Decisões da IA
               {isRunning && (
                 <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-sans font-normal">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></span>
                   ao vivo
                 </span>
               )}
             </h4>
             <p className="text-[10px] text-neutral-500">
-              Observações em tempo real justificando compra, venda ou manutenção de posição
+              Observações e justificativas em tempo real
             </p>
           </div>
         </div>
@@ -141,7 +155,7 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
       <div ref={containerRef} className="flex-1 overflow-y-auto py-3 space-y-2.5 custom-scrollbar pr-1">
         {filteredMessages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-neutral-500 text-xs gap-2">
-            <span className="text-xl">🎯</span>
+            <Target className="w-6 h-6 text-neutral-600" />
             <span>Aguardando os primeiros pensamentos do robô na sessão...</span>
           </div>
         ) : (
@@ -163,7 +177,7 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
                         msg.tag
                       )}`}
                     >
-                      <span>{getIcon(msg.tag)}</span>
+                      {renderIcon(msg.tag)}
                       <span>{msg.tag || 'SISTEMA'}</span>
                     </span>
                     {msg.symbol && msg.symbol !== 'SESSÃO' && msg.symbol !== 'FINAL' && (
@@ -190,9 +204,9 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
 
       {/* Rodapé: Indicador de Atividade ao Vivo */}
       {isRunning && (
-        <div className="pt-2 border-t border-neutral-850 flex items-center gap-2 text-[11px] text-neutral-400 font-mono">
-          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
-          <span>Sniper AI analisando ticks de 3s e avaliando saídas dinâmicas...</span>
+        <div className="pt-2 border-t border-neutral-800/80 flex items-center gap-2 text-[11px] text-neutral-400 font-mono">
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping"></span>
+          <span>Sniper AI analisando ticks e avaliando saídas dinâmicas...</span>
         </div>
       )}
     </div>

@@ -63,6 +63,11 @@ export default function SniperDaytradePanel() {
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState<number>(600)
   const [graceSeconds, setGraceSeconds] = useState<number>(0)
   const [inGracePeriod, setInGracePeriod] = useState<boolean>(false)
+  
+  // Saldos reais e trava de segurança
+  const [balances, setBalances] = useState<{ BRL: number; USDT: number }>({ BRL: 0, USDT: 0 })
+  const [isDryRun, setIsDryRun] = useState<boolean>(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // Polling dos dados da sessão a cada 3 segundos
   const fetchDaytradeState = useCallback(async () => {
@@ -73,6 +78,13 @@ export default function SniperDaytradePanel() {
       setSession(data.session)
       setSnapshots(data.snapshots || [])
       setMicrotrades(data.microtrades || [])
+
+      if (data.balances) {
+        setBalances(data.balances)
+      }
+      if (data.botConfig) {
+        setIsDryRun(data.botConfig.dry_run ?? false)
+      }
 
       if (data.session?.status === 'pending') {
         setEstimatedWaitSeconds(data.estimatedWaitSeconds || 0)
@@ -139,20 +151,25 @@ export default function SniperDaytradePanel() {
     return () => clearInterval(timer)
   }, [session])
 
-  // Submissão: Iniciar Modo Sniper
+  // Submissão: Iniciar Modo Sniper com validações de trava
   const handleStart = async () => {
+    if (isBlocked) return
     setLoading(true)
+    setErrorMessage(null)
     try {
       const res = await fetch('/api/daytrade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'request', capital, currency }),
       })
-      if (res.ok) {
+      const data = await res.json()
+      if (!res.ok) {
+        setErrorMessage(data.error || 'Falha ao solicitar sessão')
+      } else {
         await fetchDaytradeState()
       }
-    } catch (e) {
-      console.error('Erro ao iniciar Daytrade:', e)
+    } catch (e: any) {
+      setErrorMessage(e?.message || 'Erro ao iniciar Daytrade')
     } finally {
       setLoading(false)
     }
@@ -186,6 +203,14 @@ export default function SniperDaytradePanel() {
   const isPending = session?.status === 'pending'
   const isRunning = session?.status === 'running'
   const isCompleted = session?.status === 'completed'
+
+  // Cálculos da trava de segurança de saldo e lote mínimo
+  const availableBalance = currency === 'BRL' ? balances.BRL : balances.USDT
+  const minRequired = currency === 'BRL' ? 10 : 5
+  const isBelowMinimum = capital < minRequired
+  const exceedsBalance = !isDryRun && capital > availableBalance
+  const insufficientBalanceForMin = !isDryRun && availableBalance < minRequired
+  const isBlocked = isBelowMinimum || exceedsBalance || insufficientBalanceForMin
 
   return (
     <section className="bg-neutral-900/60 rounded-2xl border border-rose-950/40 p-6 backdrop-blur-md relative overflow-hidden shadow-[0_0_40px_rgba(244,63,94,0.05)]">
@@ -236,10 +261,21 @@ export default function SniperDaytradePanel() {
       {!isRunning && !isPending && (
         <div className="bg-neutral-950/60 border border-neutral-800/80 rounded-xl p-5 mb-5 space-y-4">
           <div className="flex justify-between items-center flex-wrap gap-4">
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 block">
-                Capital Alocado para a Sessão
-              </label>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-bold uppercase tracking-wider text-neutral-400 block">
+                  Capital Alocado para a Sessão
+                </label>
+                {/* Badge de Saldo Disponível na Binance */}
+                <span className={`text-[11px] font-mono px-2 py-0.5 rounded border ${
+                  availableBalance >= minRequired
+                    ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800/40'
+                    : 'bg-rose-950/60 text-rose-400 border-rose-800/40'
+                }`}>
+                  Saldo Livre: <strong>{currency === 'BRL' ? `R$ ${balances.BRL.toFixed(2)}` : `$ ${balances.USDT.toFixed(2)} USDT`}</strong>
+                </span>
+              </div>
+
               <div className="flex items-center gap-2">
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-xs text-neutral-400 font-mono">
@@ -297,18 +333,66 @@ export default function SniperDaytradePanel() {
               </div>
             </div>
 
-            {/* Botão de Disparo */}
+            {/* Botão de Disparo com Trava de Segurança */}
             <div className="flex items-end">
               <button
                 onClick={handleStart}
-                disabled={loading || capital <= 0}
-                className="px-6 py-3 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-extrabold text-sm rounded-xl transition-all shadow-[0_0_20px_rgba(225,29,72,0.3)] flex items-center gap-2.5 cursor-pointer disabled:opacity-50"
+                disabled={loading || isBlocked}
+                className={`px-6 py-3 font-extrabold text-sm rounded-xl transition-all flex items-center gap-2.5 ${
+                  isBlocked
+                    ? 'bg-neutral-800 text-neutral-500 cursor-not-allowed border border-neutral-700'
+                    : 'bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white shadow-[0_0_20px_rgba(225,29,72,0.3)] cursor-pointer'
+                }`}
               >
-                <span>⚡</span>
-                <span>ATIVAR SESSÃO SNIPER (10 MIN)</span>
+                <span>{isBlocked ? '🔒' : '⚡'}</span>
+                <span>{isBlocked ? 'OPERAÇÃO TRAVADA' : 'ATIVAR SESSÃO SNIPER (10 MIN)'}</span>
               </button>
             </div>
           </div>
+
+          {/* BANNERS DE TRAVA DE SEGURANÇA E FEEDBACK */}
+          {insufficientBalanceForMin && (
+            <div className="p-3.5 rounded-xl bg-rose-950/30 border border-rose-500/40 text-xs text-rose-300 flex items-start gap-2.5">
+              <span className="text-base">🚫</span>
+              <div>
+                <strong className="text-rose-400 block font-bold mb-0.5">Trava de Segurança Ativa: Saldo Insuficiente na Binance</strong>
+                <span>
+                  Você possui apenas {currency === 'BRL' ? `R$ ${balances.BRL.toFixed(2)}` : `$${balances.USDT.toFixed(2)} USDT`} livres na corretora. O lote mínimo para transações de trade na Binance é de <strong>{currency === 'BRL' ? 'R$ 10,00' : '$5.00 USDT'}</strong>. Deposite saldo ou ative o <strong>Modo Simulação</strong> nas configurações.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {exceedsBalance && !insufficientBalanceForMin && (
+            <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/40 text-xs text-amber-300 flex items-start gap-2.5">
+              <span className="text-base">⚠️</span>
+              <div>
+                <strong className="text-amber-400 block font-bold mb-0.5">Trava de Segurança: Capital Excede o Saldo Livre</strong>
+                <span>
+                  O valor selecionado ({currency === 'BRL' ? `R$ ${capital.toFixed(2)}` : `$${capital.toFixed(2)} USDT`}) é maior que o saldo livre disponível ({currency === 'BRL' ? `R$ ${balances.BRL.toFixed(2)}` : `$${balances.USDT.toFixed(2)} USDT`}).
+                </span>
+              </div>
+            </div>
+          )}
+
+          {isBelowMinimum && (
+            <div className="p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30 text-xs text-amber-300">
+              ⚠️ O valor mínimo para operações de trade na Binance é de <strong>{currency === 'BRL' ? 'R$ 10,00' : '$5.00 USDT'}</strong>.
+            </div>
+          )}
+
+          {isDryRun && (
+            <div className="p-2.5 rounded-lg bg-indigo-950/30 border border-indigo-500/30 text-xs text-indigo-300 flex items-center gap-2">
+              <span>🧪</span>
+              <span><strong>Modo Simulação (Dry Run) Ativo:</strong> As operações serão simuladas com as cotações reais da Binance sem debitar saldo da conta.</span>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-500/50 text-xs text-rose-300">
+              ❌ {errorMessage}
+            </div>
+          )}
         </div>
       )}
 

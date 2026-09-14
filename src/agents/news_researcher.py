@@ -11,36 +11,45 @@ class NewsResearcherAgent:
     """
     def __init__(self):
         self.llm = get_llm_provider()
-        # RSS Feed gratuito do Cointelegraph
-        self.rss_url = "https://cointelegraph.com/rss"
+        # RSS Feeds combinados
+        self.rss_urls = [
+            "https://cryptopanic.com/news/rss/", # Agregador Geral (Mais rápido)
+            "https://cointelegraph.com/rss",     # Focado em Análises
+            "https://www.coindesk.com/arc/outboundfeeds/rss/" # Mercado Tradicional Cripto
+        ]
 
     def fetch_latest_news(self) -> dict:
-        """Busca as últimas notícias do feed RSS e retorna o texto puro e a lista de links."""
-        try:
-            req = urllib.request.Request(self.rss_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=10) as response:
-                xml_data = response.read()
-            
-            root = ET.fromstring(xml_data)
-            news_items = []
-            links_list = []
-            
-            # Pega as 15 notícias mais recentes
-            for item in root.findall('./channel/item')[:15]:
-                title = item.find('title').text if item.find('title') is not None else ""
-                desc = item.find('description').text if item.find('description') is not None else ""
-                link = item.find('link').text if item.find('link') is not None else ""
+        """Busca as últimas notícias dos feeds RSS e retorna o texto puro e a lista de links."""
+        news_items = []
+        links_list = []
+        
+        for url in self.rss_urls:
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    xml_data = response.read()
                 
-                news_items.append(f"Título: {title}\nResumo: {desc}\n")
-                if link:
-                    links_list.append({"title": title, "url": link})
-            
-            return {
-                "text": "\n".join(news_items),
-                "links": links_list
-            }
-        except Exception as e:
-            return {"text": f"Falha ao buscar notícias: {str(e)}", "links": []}
+                root = ET.fromstring(xml_data)
+                
+                # Pega as 10 notícias mais recentes de CADA feed
+                for item in root.findall('./channel/item')[:10]:
+                    title = item.find('title').text if item.find('title') is not None else ""
+                    desc = item.find('description').text if item.find('description') is not None else ""
+                    link = item.find('link').text if item.find('link') is not None else ""
+                    
+                    news_items.append(f"Título: {title}\nResumo: {desc}\n")
+                    if link:
+                        links_list.append({"title": title, "url": link})
+            except Exception as e:
+                print(f"[Agente 1] Aviso: Falha ao ler feed {url}: {e}")
+
+        if not news_items:
+            return {"text": "Falha geral ao buscar notícias em todas as fontes.", "links": []}
+
+        return {
+            "text": "\n".join(news_items),
+            "links": links_list
+        }
 
     def analyze_news(self) -> dict:
         """Usa a IA para ler as notícias e gerar um panorama (JSON)."""

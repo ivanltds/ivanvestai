@@ -359,6 +359,8 @@ class SniperTraderAgent:
                 f"Compra a mercado executada em {sym} @ {cur_price} (${trade_cost:.2f}). Justificativa: setup técnico {t['setup']} com aceleração de volatilidade."
             )
 
+            actual_trade_cost = round(crypto_qty * cur_price, 4)
+
             buy_record = {
                 "action": "BUY",
                 "type": "BUY",
@@ -368,7 +370,7 @@ class SniperTraderAgent:
                 "time": time.strftime("%H:%M:%S"),
                 "price": cur_price,
                 "qty": crypto_qty,
-                "amount": trade_cost,
+                "amount": actual_trade_cost,
                 "currency": self.currency,
                 "reason": f"Scanner Sniper ({t['setup']})",
                 "pnl_pct": 0.0
@@ -384,7 +386,7 @@ class SniperTraderAgent:
                 "current_price": cur_price,
                 "highest_price": cur_price,
                 "crypto_qty": crypto_qty,
-                "entry_cost": trade_cost,
+                "entry_cost": actual_trade_cost,
                 "buy_timestamp": time.time(),
                 "buy_time": time.strftime("%H:%M:%S"),
                 "pnl_pct": 0.0,

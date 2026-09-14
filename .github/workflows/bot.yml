@@ -30,8 +30,9 @@ jobs:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
-          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
-          DRY_RUN: 'True' # Mude para 'False' no seu Vercel/GitHub quando quiser operar dinheiro real
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL || secrets.UPSTASH_REDIS_REST_URL }}
+          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN || secrets.UPSTASH_REDIS_REST_TOKEN }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL || secrets.KV_REST_API_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN || secrets.KV_REST_API_TOKEN }}
         run: |
           python main.py

@@ -48,7 +48,7 @@ class PortfolioManagerAgent:
                 print(f"[Agente 3] Erro ao buscar preço/ATR para {symbol}: {e}")
         return data
 
-    def enforce_risk_limits(self, approved_trades: list, current_balances: dict, open_positions_memory: dict, news_insights: dict, user_directives: str = "") -> list:
+    def enforce_risk_limits(self, approved_trades: list, current_balances: dict, open_positions_memory: dict, news_insights: dict, user_directives: str = "", learned_lessons: str = "") -> list:
         """
         Usa a IA para avaliar a carteira atual e o histórico de compras do Redis.
         """
@@ -64,6 +64,10 @@ class PortfolioManagerAgent:
         DIRETRIZ HUMANA (OVERRIDE DE PRIORIDADE MÁXIMA):
         "{user_directives}"
         Se a diretriz humana disser para vender tudo, comprar algo específico ou ignorar risco, VOCÊ DEVE OBEDECER CEGAMENTE. Ela tem precedência sobre todas as regras abaixo.
+
+        LIÇÕES APRENDIDAS (EXPERIÊNCIA PASSADA):
+        "{learned_lessons}"
+        Siga estas lições para não repetir os mesmos erros de negociações anteriores.
         
         REGRA 1: Memecoins nunca podem passar de {self.max_memecoin_pct}% da carteira.
         REGRA 2 (STOP LOSS DINÂMICO): 
@@ -75,6 +79,10 @@ class PortfolioManagerAgent:
         REGRA 3 (DIVERSIFICAÇÃO OBRIGATÓRIA):
            O fundo deve manter no MÍNIMO 5 ativos diferentes em carteira.
            Se no "Histórico de Compras" houver menos de 5 ativos, PRIORIZE a aprovação de ordens de ativos NOVOS (que ainda não estão na carteira) a partir das "Propostas de Compra Novas".
+        REGRA 4 (RISCO X RETORNO DE TAXAS):
+           Lembre-se que a corretora cobra cerca de 0.2% de taxas totais na operação.
+           Se a expectativa de lucro imediato (pela análise gráfica + notícias) não for claramente e folgadamente superior a essa margem de custo, REJEITE a operação.
+           É preferível não operar do que perder dinheiro com taxas em mercados laterais.
         
         DADOS DE ENTRADA:
         1. Balanços Atuais na Binance: {json.dumps(current_balances)}

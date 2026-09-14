@@ -2,8 +2,8 @@ name: IvanvestAI Bot CRON
 
 on:
   schedule:
-    # Roda no minuto 0 de toda hora (de hora em hora)
-    - cron: '0 * * * *'
+    # Roda a cada 15 minutos
+    - cron: '*/15 * * * *'
   workflow_dispatch: # Permite rodar manualmente clicando num botão no GitHub
 
 jobs:

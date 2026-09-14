@@ -16,7 +16,7 @@ class MemoryAgent:
             return user_directives
         return ""
         
-    def commit_cycle(self, news_insights: dict, final_trades: list, current_balances: dict):
+    def commit_cycle(self, news_insights: dict, final_trades: list, current_balances: dict, learned_lessons: str = ""):
         """
         Salva tudo que aconteceu na execução para o Dashboard ler depois.
         """
@@ -27,11 +27,11 @@ class MemoryAgent:
         kv_db.save_market_sentiment(is_bullish, news_insights.get("summary", ""))
         
         # 2. Salva o Diário de Bordo (Audit Log)
-        # Filtra trades não executados se houver falha matemática, 
-        # mas aqui simplificamos e salvamos o que foi enviado para execução
         audit_entry = {
             "timestamp": int(time.time()),
             "news_summary": news_insights.get("summary", ""),
+            "news_sources": news_insights.get("sources", []),
+            "learned_lessons": learned_lessons,
             "trades": final_trades,
             "directives_applied": self.fetch_context()
         }

@@ -101,12 +101,30 @@ class KVDatabase:
         data = self._execute_command("get", "ai:user_directives")
         return data if data else ""
         
+    def get_audit_logs(self, limit: int = 10) -> list:
+        """Lê os últimos N logs."""
+        try:
+            data = self._execute_command("lrange", "dashboard:audit_logs", "0", str(limit - 1))
+            if data:
+                return [json.loads(urllib.parse.unquote(item)) for item in data]
+        except Exception as e:
+            print(f"[DB] Erro ao ler audit_logs: {e}")
+        return []
+
     def save_audit_log(self, log_entry: dict):
         """Salva a execução no Diário de Bordo do Dashboard (usa lpush para lista)."""
         import urllib.parse
         encoded_val = urllib.parse.quote(json.dumps(log_entry), safe='')
+        
+        # 1. Pega o item 100 (que vai ser jogado fora pelo ltrim) e salva no arquivo histórico
+        old_item = self._execute_command("lindex", "dashboard:audit_logs", "99")
+        if old_item:
+            self._execute_command("lpush", "dashboard:audit_logs_archive", old_item)
+            
+        # 2. Insere o novo log
         self._execute_command("lpush", "dashboard:audit_logs", encoded_val)
-        self._execute_command("ltrim", "dashboard:audit_logs", "0", "99") # Mantém só os últimos 100
+        # 3. Mantém apenas os últimos 100 na tabela principal
+        self._execute_command("ltrim", "dashboard:audit_logs", "0", "99")
 
     def save_portfolio_value(self, total_pnl: float):
         """Salva a evolução do PNL para o gráfico"""

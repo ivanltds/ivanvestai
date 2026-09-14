@@ -232,6 +232,33 @@ export default async function DashboardPage() {
                     <p className="text-xs text-neutral-500 mb-2 font-mono">{date}</p>
                     <p className="text-sm text-neutral-300 mb-3">{entry.news_summary}</p>
                     
+                    {entry.news_sources && entry.news_sources.length > 0 && (
+                      <div className="mb-3 p-2 bg-neutral-900/50 border border-neutral-800 rounded text-xs text-neutral-400">
+                        <strong className="text-neutral-300 mb-1 block">Fontes Consultadas:</strong>
+                        <ul className="list-disc pl-4 space-y-1">
+                          {entry.news_sources.map((src: any, sIdx: number) => (
+                            <li key={sIdx}>
+                              <a href={src.url} target="_blank" rel="noopener noreferrer" className="hover:text-purple-400 underline decoration-neutral-600 underline-offset-2">
+                                {src.title}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {entry.learned_lessons && (
+                      <div className="mb-3 p-3 bg-amber-950/20 border border-amber-500/20 rounded-lg text-sm text-amber-300/90 shadow-[inset_0_0_10px_rgba(245,158,11,0.05)]">
+                        <strong className="text-amber-400 mb-1 flex items-center gap-2">
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                          </svg>
+                          Lição da IA:
+                        </strong> 
+                        {entry.learned_lessons}
+                      </div>
+                    )}
+                    
                     {entry.directives_applied && (
                       <div className="mb-3 p-2 bg-purple-900/20 border border-purple-500/20 rounded text-xs text-purple-300 inline-block">
                         <strong>Obedeceu:</strong> {entry.directives_applied}

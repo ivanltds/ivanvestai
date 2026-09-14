@@ -12,6 +12,7 @@ from src.agents.crypto_expert import CryptoExpertAgent
 from src.agents.portfolio_manager import PortfolioManagerAgent
 from src.agents.trade_generator import TradeGeneratorAgent
 from src.agents.risk_reviewer import RiskReviewerAgent
+from src.agents.performance_analyst import PerformanceAnalystAgent
 from src.db.vercel_kv import kv_db
 
 def get_binance_balances():
@@ -104,11 +105,16 @@ def main():
     ag2 = CryptoExpertAgent()
     approved_trades = ag2.filter_and_map_coins(news_insights, user_directives)
     
+    # 1.5 Analista de Performance (Aprendizado)
+    ag1_5 = PerformanceAnalystAgent()
+    recent_logs = kv_db.get_audit_logs(limit=10)
+    open_positions_memory = kv_db.get_open_positions()
+    learned_lessons = ag1_5.generate_lessons(recent_logs, open_positions_memory)
+    
     # 3. Gestor de Portfólio (Lê da Memória)
     ag3 = PortfolioManagerAgent()
     current_balances = get_binance_balances()
-    open_positions_memory = kv_db.get_open_positions()
-    final_trades = ag3.enforce_risk_limits(approved_trades, current_balances, open_positions_memory, news_insights, user_directives)
+    final_trades = ag3.enforce_risk_limits(approved_trades, current_balances, open_positions_memory, news_insights, user_directives, learned_lessons)
     
     # 4. Operador (Matemático)
     ag4 = TradeGeneratorAgent()
@@ -139,7 +145,7 @@ def main():
         print("Comitê decidiu NÃO operar nesta hora.")
         
     # 0. Finaliza o ciclo salvando o log no Dashboard
-    ag0.commit_cycle(news_insights, executed_trades, current_balances)
+    ag0.commit_cycle(news_insights, executed_trades, current_balances, learned_lessons)
     
     print("=== CICLO CONCLUÍDO COM SUCESSO ===")
 

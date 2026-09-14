@@ -105,14 +105,24 @@ def execute_order(order, exchange):
                 target_qty = free_asset_qty
                 matching_key = symbol
 
+            # Checagem de limites de lote e valor mínimo da Binance
+            market = markets.get(symbol, {})
+            min_amount = market.get('limits', {}).get('amount', {}).get('min', 0.0) or 0.0
+            min_cost = market.get('limits', {}).get('cost', {}).get('min', 0.0) or 1.0
+
             try:
                 crypto_qty = float(exchange.amount_to_precision(symbol, target_qty))
             except:
                 crypto_qty = target_qty
 
-            if crypto_qty <= 0:
-                print(f"[VENDA DESCARTADA] Saldo livre insuficiente de {base_asset} ({free_asset_qty}) para vender na Binance.")
+            order_value = crypto_qty * price
+
+            if crypto_qty <= 0 or (min_amount > 0 and crypto_qty < min_amount) or order_value < min_cost:
+                print(f"[VENDA IGNORADA] Saldo de {base_asset} ({free_asset_qty}) é poeira residual abaixo do mínimo da Binance ({min_amount} moedas / {min_cost:.2f} {quote_asset}). Ordem ignorada.")
+                if matching_key and matching_key in positions:
+                    kv_db.register_sell(matching_key)
                 return None
+
 
             is_dry_run = order.get('dry_run', True)
             if is_dry_run:

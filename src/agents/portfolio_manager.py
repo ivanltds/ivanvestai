@@ -168,7 +168,18 @@ class PortfolioManagerAgent:
                                 "action": "BUY",
                                 "is_memecoin": False
                             })
-                        break
+        # Remove ordens de venda para moedas já liquidadas ou que possuem apenas poeira técnica (< 1 moeda ou residual)
+        cleaned_trades = []
+        for t in final_trades:
+            if t.get("action") == "SELL":
+                base = t["symbol"].split('/')[0].upper()
+                qty = float(current_balances.get(base, 0.0))
+                if qty <= 0.00001:
+                    continue
+                if base in memecoin_tickers and qty < 1.0:
+                    continue
+            cleaned_trades.append(t)
 
-        return final_trades
+        return cleaned_trades
+
 

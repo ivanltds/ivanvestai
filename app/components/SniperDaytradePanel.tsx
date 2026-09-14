@@ -202,6 +202,14 @@ export default function SniperDaytradePanel() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
   }
 
+  const formatPrice = (val?: number, curr = 'BRL') => {
+    if (!val || isNaN(val)) return curr === 'USDT' ? '$ 0,00' : 'R$ 0,00'
+    if (curr === 'USDT' || curr === 'USD') {
+      return `$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+    }
+    return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  }
+
   const isPending = session?.status === 'pending'
   const isRunning = session?.status === 'running'
   const isCompleted = session?.status === 'completed'
@@ -477,7 +485,7 @@ export default function SniperDaytradePanel() {
               </div>
               {session?.in_position && session.entry_price && (
                 <p className="text-xs text-neutral-400 font-mono mt-1">
-                  Entrada: {session.entry_price.toLocaleString('pt-BR', { style: 'currency', currency: session.currency || 'BRL' })}
+                  Entrada: {formatPrice(session.entry_price, session.currency)}
                 </p>
               )}
             </div>
@@ -598,7 +606,7 @@ export default function SniperDaytradePanel() {
                         {snap.in_position ? 'POSICIONADO' : 'AGUARDANDO GATILHO'}
                       </span>
                       <span className="text-white font-semibold">
-                        {snap.current_price?.toLocaleString('pt-BR', { style: 'currency', currency })}
+                        {formatPrice(snap.current_price, currency)}
                       </span>
                     </div>
 

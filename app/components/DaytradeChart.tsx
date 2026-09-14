@@ -117,8 +117,13 @@ export default function DaytradeChart({
   const padding = (maxPrice - minPrice) * 0.15 || minPrice * 0.001
   const yDomain = [Math.floor(minPrice - padding), Math.ceil(maxPrice + padding)]
 
-  const formatCurrency = (val: number) =>
-    val.toLocaleString('pt-BR', { style: 'currency', currency })
+  const formatCurrency = (val: number) => {
+    if (!val || isNaN(val)) return currency === 'USDT' ? '$ 0,00' : 'R$ 0,00'
+    if (currency === 'USDT' || currency === 'USD') {
+      return `$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+    }
+    return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  }
 
   return (
     <div className="space-y-3">

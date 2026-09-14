@@ -66,6 +66,13 @@ export default async function DashboardPage() {
 
   // Formatações
   const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val)
+  const formatPrice = (val?: number, curr = 'BRL') => {
+    if (!val || isNaN(val)) return curr === 'USDT' ? '$ 0,00' : 'R$ 0,00'
+    if (curr === 'USDT' || curr === 'USD') {
+      return `$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+    }
+    return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  }
   const formatDateTime = (val: any) => {
     if (!val) return ''
     const num = Number(val)
@@ -382,7 +389,7 @@ export default async function DashboardPage() {
                                 <span className="text-neutral-300 font-semibold">{t.qty?.toFixed(6)} BTC</span>
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="text-neutral-400">@ {t.price?.toLocaleString('pt-BR', { style: 'currency', currency: t.currency || 'BRL' })}</span>
+                                <span className="text-neutral-400">@ {formatPrice(t.price, t.currency)}</span>
                                 {t.pnl_pct !== undefined && (
                                   <span className={`font-bold ${t.pnl_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                                     {t.pnl_pct >= 0 ? '+' : ''}{t.pnl_pct.toFixed(2)}%

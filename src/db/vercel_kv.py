@@ -53,7 +53,9 @@ class KVDatabase:
         data = self._execute_command("get", "portfolio:open_positions")
         if data:
             try:
-                return json.loads(data)
+                import urllib.parse
+                decoded = urllib.parse.unquote(data) if isinstance(data, str) else data
+                return json.loads(decoded) if isinstance(decoded, str) else decoded
             except:
                 return {}
         return {}
@@ -177,6 +179,7 @@ class KVDatabase:
         e ajusta o Preço Médio (PM) para a realidade matemática.
         Atualiza também o Preço Atual e Preço Anterior para o Dashboard.
         """
+        import ccxt
         positions = self.get_open_positions()
         synced = False
         
@@ -184,7 +187,6 @@ class KVDatabase:
         tickers = {}
         if positions:
             try:
-                import ccxt
                 exchange = ccxt.binance({'enableRateLimit': True})
                 # Evita chamadas inválidas buscando 1 por 1 ou fetch_tickers se suportado
                 for symbol in positions.keys():
@@ -197,7 +199,6 @@ class KVDatabase:
                 print(f"[DB] Aviso: Não foi possível buscar cotações para PnL: {e}")
         
         for symbol in list(positions.keys()):
-            # Atualiza histórico de preço para a Seta de Tendência e PnL Real
             if symbol in tickers:
                 new_price = tickers[symbol]
                 old_price = positions[symbol].get('current_price', new_price)
@@ -205,22 +206,61 @@ class KVDatabase:
                 positions[symbol]['current_price'] = new_price
                 synced = True
 
-            # O symbol na Binance geralmente vem como 'BTC', no bot salvamos 'BTC/BRL'
             base_coin = symbol.split('/')[0] if '/' in symbol else symbol
-            
             if base_coin in real_balances and real_balances[base_coin] > 0.00001:
-                # Atualiza a quantidade exata de moedas que temos (pós-taxas)
                 real_qty = real_balances[base_coin]
                 if positions[symbol].get('total_coins', 0) != real_qty:
                     positions[symbol]['total_coins'] = real_qty
-                    # Recalcula o Preço Médio com base na quantidade real
                     positions[symbol]['avg_price'] = positions[symbol].get('total_invested', 0) / real_qty
                     synced = True
-            else:
-                # Se não temos mais saldo na Binance, remove da memória (Zero Dust)
+            elif base_coin not in real_balances:
                 del positions[symbol]
                 synced = True
-                
+        
+        # 2. Detecta moedas com saldo real na Binance que ainda não estão registradas em posições
+        try:
+            exchange = ccxt.binance({'enableRateLimit': True})
+            for coin, qty in real_balances.items():
+                if coin == 'BRL' or qty <= 0.000001:
+                    continue
+                symbol = f"{coin}/BRL"
+                if symbol not in positions:
+                    try:
+                        ticker = exchange.fetch_ticker(symbol)
+                        price = ticker['last']
+                        val_brl = qty * price
+                        if val_brl >= 2.0:  # Ignora poeira < R$2
+                            positions[symbol] = {
+                                "total_coins": qty,
+                                "total_invested": round(val_brl, 2),
+                                "avg_price": price,
+                                "current_price": price,
+                                "last_price": price
+                            }
+                            synced = True
+                            print(f"[DB] Nova posição detectada e sincronizada: {symbol} ({qty} moedas, R${val_brl:.2f})")
+                    except:
+                        # Tenta par via USDT se não houver par direto BRL
+                        try:
+                            t_usdt = exchange.fetch_ticker(f"{coin}/USDT")
+                            t_dolar = exchange.fetch_ticker("USDT/BRL")
+                            price_brl = t_usdt['last'] * t_dolar['last']
+                            val_brl = qty * price_brl
+                            if val_brl >= 2.0:
+                                positions[symbol] = {
+                                    "total_coins": qty,
+                                    "total_invested": round(val_brl, 2),
+                                    "avg_price": price_brl,
+                                    "current_price": price_brl,
+                                    "last_price": price_brl
+                                }
+                                synced = True
+                                print(f"[DB] Nova posição detectada via USDT: {symbol} ({qty} moedas, R${val_brl:.2f})")
+                        except:
+                            pass
+        except Exception as e:
+            print(f"[DB] Erro ao sincronizar novas posições: {e}")
+
         if synced:
             import urllib.parse
             encoded_val = urllib.parse.quote(json.dumps(positions), safe='')

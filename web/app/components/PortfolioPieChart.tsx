@@ -50,7 +50,7 @@ export default function PortfolioPieChart({ data }: { data: any }) {
             ))}
           </Pie>
           <Tooltip 
-            formatter={(value: number) => formatCurrency(value)}
+            formatter={(value: any) => formatCurrency(Number(value))}
             contentStyle={{ backgroundColor: '#171717', border: '1px solid #262626', borderRadius: '8px' }}
             itemStyle={{ color: '#e5e5e5' }}
           />

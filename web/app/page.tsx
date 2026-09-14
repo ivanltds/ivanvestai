@@ -16,11 +16,11 @@ export default async function DashboardPage() {
     auditLogsRaw, 
     activeDirective
   ] = await Promise.all([
-    redis.get('portfolio:open_positions'),
-    redis.get('dashboard:current_sentiment'),
-    redis.lrange('dashboard:pnl_history', 0, 10),
-    redis.lrange('dashboard:audit_logs', 0, 10),
-    redis.get('ai:user_directives'),
+    redis.get<any>('portfolio:open_positions'),
+    redis.get<any>('dashboard:current_sentiment'),
+    redis.lrange<any>('dashboard:pnl_history', 0, 10),
+    redis.lrange<any>('dashboard:audit_logs', 0, 10),
+    redis.get<string>('ai:user_directives'),
   ])
 
   // Como o Python salva com urllib.parse.quote, precisamos de-codificar o URL (ex: %7B vira {) antes do JSON parse

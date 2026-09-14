@@ -13,8 +13,8 @@ class NewsResearcherAgent:
         self.llm = get_llm_provider()
         # RSS Feeds combinados
         self.rss_urls = [
-            "https://cryptopanic.com/news/rss/", # Agregador Geral (Mais rápido)
-            "https://cointelegraph.com/rss",     # Focado em Análises
+            "https://decrypt.co/feed",                        # Agregador e Notícias Rápidas
+            "https://cointelegraph.com/rss",                  # Focado em Análises e Mercado
             "https://www.coindesk.com/arc/outboundfeeds/rss/" # Mercado Tradicional Cripto
         ]
 
@@ -25,7 +25,8 @@ class NewsResearcherAgent:
         
         for url in self.rss_urls:
             try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
+                req = urllib.request.Request(url, headers=headers)
                 with urllib.request.urlopen(req, timeout=10) as response:
                     xml_data = response.read()
                 

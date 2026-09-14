@@ -22,8 +22,9 @@ class KVDatabase:
             self.enabled = False
         else:
             self.enabled = True
-            # Remove barra no final da URL se existir
-            self.url = self.url.rstrip('/')
+            # Remove espaços, quebras de linha acidentais do GitHub Secrets e barra final
+            self.url = self.url.strip().strip('"').strip("'").rstrip('/')
+            self.token = self.token.strip().strip('"').strip("'")
 
     def _execute_command(self, *args):
         if not self.enabled:

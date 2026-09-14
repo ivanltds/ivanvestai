@@ -5,3 +5,4 @@ tenacity>=8.2.3
 requests>=2.31.0
 functions-framework==3.*
 openai==1.*
+redis==5.*

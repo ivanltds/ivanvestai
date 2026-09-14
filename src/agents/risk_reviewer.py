@@ -29,11 +29,12 @@ class RiskReviewerAgent:
         Orçamento Máximo Total Permitido: {self.total_budget}
         
         Checagens Obrigatórias:
-        1. A soma dos 'fiat_amount' de todas as ordens não pode ultrapassar o Orçamento Máximo ({self.total_budget}).
-        2. O 'fiat_amount' não pode ser negativo.
-        3. A ação DEVE ser 'BUY'.
+        1. Se houver ordens de 'BUY', a soma de seus 'fiat_amount' não pode ultrapassar o Orçamento Máximo ({self.total_budget}).
+        2. O 'fiat_amount' nunca pode ser negativo. Se for 'SELL', deve ser exatamente 0.
+        3. A ação DEVE ser 'BUY' ou 'SELL'.
+        4. É perfeitamente VÁLIDO receber uma lista que contenha apenas ordens de 'SELL' (onde a soma de compras será 0).
         
-        Se algo estiver errado, você DEVE retornar uma lista de ordens vazia [].
+        Se alguma dessas 4 regras for quebrada, você DEVE retornar uma lista de ordens vazia [].
         Se tudo estiver matematicamente perfeito, retorne as ordens exatamente como recebeu.
         
         Retorne estritamente um JSON neste formato:

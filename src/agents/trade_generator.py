@@ -14,28 +14,32 @@ class TradeGeneratorAgent:
 
     def generate_orders(self, final_trades: list) -> list:
         """
-        Divide o orçamento total igualmente entre as moedas aprovadas.
+        Divide o orçamento total igualmente entre as moedas aprovadas para BUY.
+        Repassa ordens de SELL intactas (pois a execução fará o sell total).
         """
         if not final_trades:
-            print("[Agente 4] Nenhuma moeda aprovada para compra hoje. Operador ocioso.")
+            print("[Agente 4] Nenhuma moeda aprovada para operação. Operador ocioso.")
             return []
 
-        print(f"[Agente 4] Operador estruturando a matemática para {len(final_trades)} moedas com orçamento de {self.total_budget}...")
+        print(f"[Agente 4] Operador estruturando a matemática das ordens (Orçamento Base de DCA: {self.total_budget})...")
         
         system_prompt = f"""
         Você é um algoritmo Operador (Execution Trader).
-        O Gestor aprovou as seguintes compras: {json.dumps(final_trades)}
+        O Gestor aprovou as seguintes operações: {json.dumps(final_trades)}
         
-        Você tem um orçamento total de {self.total_budget} na moeda base.
-        Sua tarefa é dividir esse orçamento IGUALMENTE entre todas as moedas aprovadas.
+        Orçamento total para compras (BUY): {self.total_budget}.
+        
+        Sua tarefa:
+        1. Para todas as ordens de 'BUY', divida o orçamento de {self.total_budget} IGUALMENTE entre elas e defina o 'fiat_amount'.
+        2. Para todas as ordens de 'SELL', apenas repasse a ordem definindo o 'fiat_amount' como 0 (a exchange liquidará tudo).
         
         Retorne estritamente um JSON neste formato:
         {{
             "orders": [
                 {{
                     "symbol": "TICKER/BASE",
-                    "fiat_amount": valor numérico exato a ser gasto (duas casas decimais),
-                    "action": "BUY"
+                    "fiat_amount": valor numérico exato a ser gasto (0 se for SELL),
+                    "action": "BUY" ou "SELL"
                 }}
             ]
         }}

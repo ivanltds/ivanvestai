@@ -12,16 +12,21 @@ class CryptoExpertAgent:
         self.llm = get_llm_provider()
         self.currency = os.getenv("DCA_CURRENCY", "BRL")
 
-    def filter_and_map_coins(self, news_insights: dict) -> list:
+    def filter_and_map_coins(self, news_insights: dict, user_directives: str = "") -> list:
         """
-        Gera uma lista de ativos recomendados no formato Ticker da Binance.
+        Recebe o resumo de notícias e, opcionalmente, uma diretriz humana.
+        Filtra QUAIS moedas devem ser operadas no momento.
         """
-        print("[Agente 2] Especialista avaliando as recomendações das notícias...")
+        print("[Agente 2] Especialista avaliando as recomendações das notícias e diretrizes humanas...")
         
         system_prompt = f"""
         Você é um Especialista de Trading de Criptomoedas operando na Binance.
         O pesquisador de notícias te enviou o seguinte insight de mercado em JSON:
         {json.dumps(news_insights)}
+        
+        DIRETRIZ HUMANA (OVERRIDE DE PRIORIDADE MÁXIMA):
+        "{user_directives}"
+        Se houver uma diretriz humana acima, ELA SOBRESCREVE TODAS AS REGRAS DAS NOTÍCIAS. Você DEVE obedecer ao que o humano pediu estritamente (por exemplo: não comprar memecoins, focar em apenas uma moeda, etc). Se estiver vazia, ignore.
         
         Sua missão:
         1. Avaliar se vale a pena comprar essas moedas listadas.

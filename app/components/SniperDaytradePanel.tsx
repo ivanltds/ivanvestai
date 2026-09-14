@@ -141,6 +141,16 @@ interface SniperPolicy {
   btc_macro_filter: boolean
 }
 
+interface SniperAutoConfig {
+  enabled: boolean
+  interval_minutes: number
+  capital: number
+  currency: string
+  source_asset: string
+  last_run_timestamp?: number | null
+  nextAutoTriggerSeconds?: number
+}
+
 export default function SniperDaytradePanel() {
   const [capital, setCapital] = useState<number>(15)
   const [currency, setCurrency] = useState<'BRL' | 'USDT'>('USDT')
@@ -178,6 +188,18 @@ export default function SniperDaytradePanel() {
   const [btcMacroRegime, setBtcMacroRegime] = useState<BtcMacroRegime | null>(null)
   const [sniperPolicy, setSniperPolicy] = useState<SniperPolicy | null>(null)
 
+  // Configurações do Modo Autônomo (Disparo a cada 1 hora)
+  const [autoConfig, setAutoConfig] = useState<SniperAutoConfig>({
+    enabled: true,
+    interval_minutes: 60,
+    capital: 15,
+    currency: 'USDT',
+    source_asset: 'USDT',
+    nextAutoTriggerSeconds: 0,
+  })
+  const [autoToggling, setAutoToggling] = useState<boolean>(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
+
   // Polling dos dados da sessão a cada 3 segundos
   const fetchDaytradeState = useCallback(async () => {
     try {
@@ -211,6 +233,9 @@ export default function SniperDaytradePanel() {
       }
       if (data.sniperPolicy) {
         setSniperPolicy(data.sniperPolicy)
+      }
+      if (data.autoConfig) {
+        setAutoConfig(data.autoConfig)
       }
 
       if (data.session?.status === 'pending') {
@@ -348,6 +373,61 @@ export default function SniperDaytradePanel() {
     }
   }
 
+  // Alternar Flag do Modo Autônomo a cada 1 hora
+  const handleToggleAuto = async (newEnabled: boolean) => {
+    setAutoToggling(true)
+    try {
+      const res = await fetch('/api/daytrade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update_auto_config',
+          enabled: newEnabled,
+          capital: autoConfig.capital || 15,
+          currency: 'USDT',
+          source_asset: 'USDT',
+          interval_minutes: 60,
+        }),
+      })
+      const data = await res.json()
+      if (data.autoConfig) {
+        setAutoConfig(data.autoConfig)
+      }
+    } catch (e) {
+      console.error('Erro ao alternar modo autônomo:', e)
+    } finally {
+      setAutoToggling(false)
+    }
+  }
+
+  // Salvar ajustes das configurações autônomas
+  const handleSaveAutoSettings = async (newCapital: number, intervalMinutes = 60) => {
+    setAutoToggling(true)
+    try {
+      const res = await fetch('/api/daytrade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update_auto_config',
+          enabled: autoConfig.enabled,
+          capital: newCapital,
+          currency: 'USDT',
+          source_asset: 'USDT',
+          interval_minutes: intervalMinutes,
+        }),
+      })
+      const data = await res.json()
+      if (data.autoConfig) {
+        setAutoConfig(data.autoConfig)
+        setIsSettingsOpen(false)
+      }
+    } catch (e) {
+      console.error('Erro ao salvar configurações autônomas:', e)
+    } finally {
+      setAutoToggling(false)
+    }
+  }
+
   const formatTimer = (totalSec: number) => {
     const m = Math.floor(Math.max(0, totalSec) / 60)
     const s = Math.max(0, totalSec) % 60
@@ -459,6 +539,129 @@ export default function SniperDaytradePanel() {
             </span>
           )}
         </div>
+      </div>
+
+      {/* CARD DE CONTROLE: SNIPER AUTÔNOMO A CADA 1 HORA (FLAG DE ATIVAÇÃO / CONFIGURAÇÕES) */}
+      <div className={`p-4 rounded-xl border transition-all mb-4 ${
+        autoConfig.enabled
+          ? 'bg-gradient-to-r from-emerald-950/40 via-neutral-900/90 to-neutral-950 border-emerald-500/40 shadow-[0_0_25px_rgba(16,185,129,0.08)]'
+          : 'bg-gradient-to-r from-neutral-950 via-neutral-900 to-neutral-950 border-neutral-800'
+      }`}>
+        <div className="flex justify-between items-center flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg border ${
+              autoConfig.enabled 
+                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
+                : 'bg-neutral-800 text-neutral-400 border-neutral-700'
+            }`}>
+              {autoConfig.enabled ? '⏱️' : '⏸️'}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-extrabold text-white tracking-wide">
+                  Sniper Autônomo a cada 1 Hora
+                </span>
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase border ${
+                  autoConfig.enabled
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'bg-neutral-800 text-neutral-400 border-neutral-700'
+                }`}>
+                  {autoConfig.enabled ? 'Sempre Ativo' : 'Desativado pelo Usuário'}
+                </span>
+              </div>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                {autoConfig.enabled ? (
+                  <>
+                    Disparo programado a cada <strong>1 hora (60 min)</strong> com <strong>${autoConfig.capital || 15} {autoConfig.currency || 'USDT'}</strong>.{' '}
+                    <span className="text-emerald-400 font-mono font-bold">
+                      {autoConfig.nextAutoTriggerSeconds && autoConfig.nextAutoTriggerSeconds > 0
+                        ? `Próximo disparo em ~${Math.ceil(autoConfig.nextAutoTriggerSeconds / 60)} min`
+                        : 'Pronto para disparar no próximo ciclo'}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-neutral-500">
+                    O robô está pausado. Para reativar a rotina de 1 hora, clique no botão ao lado.
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+              className="px-3 py-1.5 rounded-lg border border-neutral-700 bg-neutral-800/90 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            >
+              <span>⚙️</span>
+              <span>{isSettingsOpen ? 'Fechar' : 'Configurações'}</span>
+            </button>
+
+            {/* Toggle Switch */}
+            <button
+              type="button"
+              disabled={autoToggling}
+              onClick={() => handleToggleAuto(!autoConfig.enabled)}
+              className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${
+                autoConfig.enabled ? 'bg-emerald-600' : 'bg-neutral-700'
+              }`}
+              title={autoConfig.enabled ? "Clique para desabilitar o modo autônomo" : "Clique para reativar o modo autônomo a cada 1 hora"}
+            >
+              <span
+                className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                  autoConfig.enabled ? 'translate-x-8' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+
+        {/* Painel de Configurações Aberto na mesma tela */}
+        {isSettingsOpen && (
+          <div className="mt-4 pt-3 border-t border-neutral-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800">
+              <label className="text-neutral-400 font-bold block mb-1">Capital por Disparo Horário:</label>
+              <div className="flex items-center gap-2">
+                <span className="text-neutral-400 font-mono text-sm">$</span>
+                <input
+                  type="number"
+                  min="5"
+                  max="1000"
+                  step="5"
+                  value={autoConfig.capital || 15}
+                  onChange={(e) => {
+                    const newCap = parseFloat(e.target.value) || 15
+                    setAutoConfig(prev => ({ ...prev, capital: newCap }))
+                  }}
+                  className="px-2.5 py-1 bg-neutral-900 border border-neutral-700 rounded-md text-white font-mono font-bold w-20 focus:outline-none focus:border-emerald-500"
+                />
+                <span className="text-neutral-400 font-mono text-xs">USDT</span>
+                <button
+                  type="button"
+                  onClick={() => handleSaveAutoSettings(autoConfig.capital, autoConfig.interval_minutes)}
+                  className="ml-auto px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-md text-xs transition-colors"
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800">
+              <label className="text-neutral-400 font-bold block mb-1">Frequência Automática:</label>
+              <span className="text-neutral-200 font-mono font-bold block py-1">
+                A cada 60 minutos (1 Hora)
+              </span>
+            </div>
+
+            <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800">
+              <label className="text-neutral-400 font-bold block mb-1">Mercado & Ativo Base:</label>
+              <span className="text-emerald-400 font-mono font-bold block py-1">
+                Pares USDT (Alocação 100% no Ativo #1)
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* BARRA DE POLÍTICA ADAPTATIVA DA IA & GATEKEEPER MACRO BTC */}

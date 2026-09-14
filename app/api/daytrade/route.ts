@@ -31,7 +31,8 @@ export async function GET() {
       chatRaw,
       historyRaw,
       sniperPolicyRaw,
-      btcMacroRaw
+      btcMacroRaw,
+      autoConfigRaw
     ] = await Promise.all([
       redis.get<any>('daytrade:session'),
       redis.get<any>('daytrade:last_cycle_timestamp'),
@@ -46,6 +47,7 @@ export async function GET() {
       redis.lrange<any>('daytrade:history', 0, 19),
       redis.get<any>('ai:sniper_policy'),
       redis.get<any>('ai:btc_macro_regime'),
+      redis.get<any>('daytrade:auto_config'),
     ])
 
     const session = safeParse(sessionRaw, null)
@@ -74,6 +76,31 @@ export async function GET() {
       regime: session?.btc_regime || 'NEUTRO',
       reason: session?.btc_reason || 'Aguardando varredura',
     })
+
+    const rawAutoConfig = safeParse(autoConfigRaw, {
+      enabled: true,
+      interval_minutes: 60,
+      capital: 15.0,
+      currency: 'USDT',
+      source_asset: 'USDT',
+      last_run_timestamp: null,
+    })
+    const nowSec = Date.now() / 1000
+    const lastAutoRun = rawAutoConfig.last_run_timestamp ? parseFloat(rawAutoConfig.last_run_timestamp) : null
+    const intervalSec = (rawAutoConfig.interval_minutes || 60) * 60
+    let nextAutoTriggerSeconds = 0
+    if (rawAutoConfig.enabled) {
+      if (!lastAutoRun) {
+        nextAutoTriggerSeconds = 0
+      } else {
+        const elapsed = nowSec - lastAutoRun
+        nextAutoTriggerSeconds = Math.max(0, Math.ceil(intervalSec - elapsed))
+      }
+    }
+    const autoConfig = {
+      ...rawAutoConfig,
+      nextAutoTriggerSeconds,
+    }
 
     // Saldo disponível oficial
     const brlBalance = parseFloat(accountBalances.BRL || 0)
@@ -251,6 +278,7 @@ export async function GET() {
       },
       sniperPolicy,
       btcMacroRegime,
+      autoConfig,
     })
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Erro ao consultar Daytrade' }, { status: 500 })
@@ -364,6 +392,26 @@ export async function POST(req: NextRequest) {
       session.cancelled_at = new Date().toISOString()
       await redis.set('daytrade:session', JSON.stringify(session))
       return NextResponse.json({ success: true, session })
+    } else if (action === 'update_auto_config') {
+      const rawCurrent = await redis.get<any>('daytrade:auto_config')
+      const current = safeParse(rawCurrent, {
+        enabled: true,
+        interval_minutes: 60,
+        capital: 15.0,
+        currency: 'USDT',
+        source_asset: 'USDT',
+        last_run_timestamp: null,
+      })
+      const updated = {
+        ...current,
+        enabled: body.enabled !== undefined ? Boolean(body.enabled) : current.enabled,
+        capital: body.capital !== undefined ? parseFloat(body.capital) : current.capital,
+        currency: body.currency || current.currency,
+        source_asset: body.source_asset || current.source_asset,
+        interval_minutes: body.interval_minutes !== undefined ? parseInt(body.interval_minutes) : (current.interval_minutes || 60),
+      }
+      await redis.set('daytrade:auto_config', encodeURIComponent(JSON.stringify(updated)))
+      return NextResponse.json({ success: true, autoConfig: updated })
     }
 
     return NextResponse.json({ error: 'Ação desconhecida' }, { status: 400 })

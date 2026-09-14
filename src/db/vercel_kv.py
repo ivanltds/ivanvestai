@@ -567,5 +567,32 @@ class KVDatabase:
             pass
         return defaults
 
+    def save_sniper_auto_config(self, config: dict):
+        """Salva a configuração do modo autônomo periódico do Sniper."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(config), safe='')
+        self._execute_command("set", "daytrade:auto_config", encoded)
+
+    def get_sniper_auto_config(self) -> dict:
+        """Retorna a configuração do modo autônomo do Sniper (sempre ativado por padrão a cada 1 hora)."""
+        import urllib.parse
+        defaults = {
+            "enabled": True,
+            "interval_minutes": 60,
+            "capital": 15.0,
+            "currency": "USDT",
+            "source_asset": "USDT",
+            "last_run_timestamp": None,
+        }
+        try:
+            data = self._execute_command("get", "daytrade:auto_config")
+            if data:
+                decoded = urllib.parse.unquote(data) if isinstance(data, str) else data
+                parsed = json.loads(decoded) if isinstance(decoded, str) else decoded
+                defaults.update(parsed)
+        except:
+            pass
+        return defaults
+
 kv_db = KVDatabase()
 

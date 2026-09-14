@@ -168,18 +168,46 @@ def main():
     max_order = bot_config.get("max_order_brl", 200.0)
     print(f"[Config] Dry Run={dry_run} | DCA={dca_amount}BRL | Min={min_order}BRL | Max={max_order}BRL")
 
-    # MODO SNIPER DAY TRADE (Se solicitado pelo Frontend)
+    # MODO SNIPER DAY TRADE (Autônomo a cada 1 hora OU manual pendente)
     daytrade_session = kv_db.get_daytrade_session()
-    if daytrade_session and daytrade_session.get("status") == "pending":
+    auto_config = kv_db.get_sniper_auto_config()
+    now_ts = time.time()
+    
+    is_manual_pending = bool(daytrade_session and daytrade_session.get("status") == "pending")
+    auto_enabled = bool(auto_config.get("enabled", True))
+    interval_sec = int(auto_config.get("interval_minutes", 60)) * 60
+    last_auto_run = auto_config.get("last_run_timestamp")
+    
+    is_hourly_due = False
+    if auto_enabled and not is_manual_pending:
+        if last_auto_run is None or (now_ts - float(last_auto_run)) >= interval_sec:
+            is_hourly_due = True
+
+    should_run_sniper = is_manual_pending or is_hourly_due
+
+    if should_run_sniper:
+        trigger_label = "SOLICITAÇÃO MANUAL" if is_manual_pending else f"AUTÔNOMO HORÁRIO ({auto_config.get('interval_minutes', 60)} MIN)"
         print("\n=======================================================")
-        print(">>> DISPARANDO MODO SNIPER DAY TRADE DE ALTO RISCO <<<")
+        print(f">>> DISPARANDO MODO SNIPER DAY TRADE [{trigger_label}] <<<")
         print("=======================================================")
+        
+        if is_manual_pending:
+            cap = float(daytrade_session.get("capital", 15.0))
+            curr = daytrade_session.get("currency", "USDT")
+            src_asset = daytrade_session.get("source_asset", "USDT")
+            sym = daytrade_session.get("symbol")
+        else:
+            cap = float(auto_config.get("capital", 15.0))
+            curr = auto_config.get("currency", "USDT")
+            src_asset = auto_config.get("source_asset", "USDT")
+            sym = "SCANNER_AUTO"
+
         from src.agents.sniper_trader import SniperTraderAgent
         sniper = SniperTraderAgent(
-            capital=float(daytrade_session.get("capital", 10.0)),
-            currency=daytrade_session.get("currency", "USDT"),
-            source_asset=daytrade_session.get("source_asset", "USDT"),
-            symbol=daytrade_session.get("symbol"),
+            capital=cap,
+            currency=curr,
+            source_asset=src_asset,
+            symbol=sym,
             dry_run=dry_run
         )
         try:
@@ -188,6 +216,17 @@ def main():
         except Exception as e:
             print(f"[Sniper Daytrade] Erro ao executar sessão: {e}")
             kv_db.finish_daytrade_session({"status": "completed", "error": str(e)})
+
+        # Atualiza timestamp do último disparo horário
+        auto_config["last_run_timestamp"] = now_ts
+        kv_db.save_sniper_auto_config(auto_config)
+    else:
+        if auto_enabled and last_auto_run:
+            elapsed_m = int((now_ts - float(last_auto_run)) / 60)
+            remaining_m = max(0, int(auto_config.get("interval_minutes", 60)) - elapsed_m)
+            print(f"[Sniper Autônomo] Ativo (1h). Último disparo há {elapsed_m} min. Próximo em ~{remaining_m} min.")
+        elif not auto_enabled:
+            print("[Sniper Autônomo] Desativado manualmente nas configurações.")
 
     # 0. Guardião da Memória (Puxa diretrizes do humano)
     ag0 = MemoryAgent()

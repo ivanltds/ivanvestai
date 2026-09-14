@@ -359,7 +359,10 @@ class SniperTraderAgent:
         iso_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         session_info["started_at"] = iso_now
         session_info["status"] = "running"
+        session_info["capital"] = session_info.get("capital", self.capital)
+        session_info["currency"] = self.currency
         session_info["source_asset"] = self.source_asset
+        session_info["symbol"] = session_info.get("symbol", self.symbol or "SCANNER_AUTO")
         session_info["in_grace_period"] = False
         session_info["positions"] = {}
         kv_db.start_daytrade_session(session_info)

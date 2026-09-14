@@ -54,10 +54,25 @@ class CryptoExpertAgent:
         candidates = news_insights.get("top_coins", [])
         technical_data = []
         
+        # Mapa de nomes completos para tickers oficiais da Binance
+        NAME_TO_TICKER = {
+            "BITCOIN": "BTC", "ETHEREUM": "ETH", "ETHER": "ETH",
+            "SOLANA": "SOL", "CARDANO": "ADA", "RIPPLE": "XRP",
+            "DOGECOIN": "DOGE", "SHIBA INU": "SHIB", "SHIBA": "SHIB",
+            "POLKADOT": "DOT", "AVALANCHE": "AVAX", "CHAINLINK": "LINK",
+            "LITECOIN": "LTC", "BINANCE COIN": "BNB", "BNBCOIN": "BNB",
+            "UNISWAP": "UNI", "POLYGON": "MATIC", "NEAR PROTOCOL": "NEAR",
+            "NEAR": "NEAR", "APTOS": "APT", "ARBITRUM": "ARB",
+            "OPTIMISM": "OP", "CELESTIA": "TIA", "INJECTIVE": "INJ",
+            "SUI": "SUI", "PEPE": "PEPE", "FLOKI": "FLOKI",
+            "USD COIN": "USDC", "TETHER": "USDT", "TONCOIN": "TON",
+        }
+
         for coin_info in candidates:
-            # Tentar adivinhar o símbolo oficial da Binance
-            coin_name = coin_info.get("coin", "").upper()
-            symbol_to_check = f"{coin_name}/{self.currency}"
+            raw_name = coin_info.get("coin", "").upper().strip()
+            # Normaliza: tenta o mapa primeiro, senão usa o nome como ticker
+            coin_ticker = NAME_TO_TICKER.get(raw_name, raw_name)
+            symbol_to_check = f"{coin_ticker}/{self.currency}"
             
             # Buscar TA
             ta_stats = self.get_technical_indicators(symbol_to_check)
@@ -65,7 +80,7 @@ class CryptoExpertAgent:
                 technical_data.append(ta_stats)
             else:
                 # Fallback para USDT se BRL não existir
-                fallback_symbol = f"{coin_name}/USDT"
+                fallback_symbol = f"{coin_ticker}/USDT"
                 ta_stats_usdt = self.get_technical_indicators(fallback_symbol)
                 technical_data.append(ta_stats_usdt)
 

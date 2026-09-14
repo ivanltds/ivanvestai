@@ -29,17 +29,36 @@ class NewsResearcherAgent:
                 with urllib.request.urlopen(req, timeout=10) as response:
                     xml_data = response.read()
                 
-                root = ET.fromstring(xml_data)
+                # Tenta parsear como XML primeiro; se falhar, tenta recuperar os items com regex
+                try:
+                    root = ET.fromstring(xml_data)
+                    items = root.findall('./channel/item')
+                except ET.ParseError:
+                    # Fallback: extrai apenas os títulos/links com regex quando o XML estiver malformado
+                    import re
+                    items_raw = re.findall(r'<item>(.*?)</item>', xml_data.decode('utf-8', errors='ignore'), re.DOTALL)
+                    class FakeItem:
+                        def __init__(self, raw):
+                            self._raw = raw
+                        def find(self, tag):
+                            tag_name = tag.split('}')[-1] if '}' in tag else tag
+                            m = re.search(rf'<{tag_name}[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</{tag_name}>', self._raw, re.DOTALL)
+                            return type('E', (), {'text': m.group(1).strip() if m else ''})() if m else None
+                    items = [FakeItem(r) for r in items_raw[:10]]
                 
                 # Pega as 10 notícias mais recentes de CADA feed
-                for item in root.findall('./channel/item')[:10]:
-                    title = item.find('title').text if item.find('title') is not None else ""
-                    desc = item.find('description').text if item.find('description') is not None else ""
-                    link = item.find('link').text if item.find('link') is not None else ""
+                for item in items[:10]:
+                    title_el = item.find('title')
+                    desc_el = item.find('description')
+                    link_el = item.find('link')
+                    title = title_el.text if title_el is not None else ""
+                    desc = desc_el.text if desc_el is not None else ""
+                    link = link_el.text if link_el is not None else ""
                     
-                    news_items.append(f"Título: {title}\nResumo: {desc}\n")
-                    if link:
-                        links_list.append({"title": title, "url": link})
+                    if title:
+                        news_items.append(f"Título: {title}\nResumo: {desc}\n")
+                        if link:
+                            links_list.append({"title": title, "url": link})
             except Exception as e:
                 print(f"[Agente 1] Aviso: Falha ao ler feed {url}: {e}")
 

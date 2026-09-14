@@ -18,17 +18,19 @@ const safeParse = (raw: any, defaultObj: any) => {
 
 export async function GET() {
   try {
-    const [sessionRaw, lastCycleTsRaw, snapshotsRaw, microtradesRaw] = await Promise.all([
+    const [sessionRaw, lastCycleTsRaw, snapshotsRaw, microtradesRaw, tradesRaw] = await Promise.all([
       redis.get<any>('daytrade:session'),
       redis.get<any>('daytrade:last_cycle_timestamp'),
-      redis.lrange<any>('daytrade:snapshots', 0, 30),
-      redis.lrange<any>('daytrade:trades', 0, 50),
+      redis.lrange<any>('daytrade:snapshots', -30, -1),
+      redis.lrange<any>('daytrade:microtrades', -50, -1),
+      redis.lrange<any>('daytrade:trades', -50, -1),
     ])
 
     const session = safeParse(sessionRaw, null)
     const lastCycleTs = lastCycleTsRaw ? parseFloat(lastCycleTsRaw) : null
     const snapshots = (snapshotsRaw || []).map((s: any) => safeParse(s, {})).reverse()
-    const microtrades = (microtradesRaw || []).map((t: any) => safeParse(t, {})).reverse()
+    const rawTrades = (microtradesRaw && microtradesRaw.length > 0) ? microtradesRaw : (tradesRaw || [])
+    const microtrades = rawTrades.map((t: any) => safeParse(t, {})).reverse()
 
     // Cálculo da estimativa de início com base no ciclo de 15 minutos (900s)
     let estimatedWaitSeconds = 0
@@ -75,7 +77,12 @@ export async function POST(req: NextRequest) {
         duration_minutes: 10,
       }
 
-      await redis.set('daytrade:session', JSON.stringify(session))
+      await Promise.all([
+        redis.set('daytrade:session', JSON.stringify(session)),
+        redis.del('daytrade:snapshots'),
+        redis.del('daytrade:microtrades'),
+        redis.del('daytrade:trades'),
+      ])
       return NextResponse.json({ success: true, session })
     } else if (action === 'cancel') {
       const sessionRaw = await redis.get<any>('daytrade:session')

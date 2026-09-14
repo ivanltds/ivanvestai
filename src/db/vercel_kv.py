@@ -398,6 +398,7 @@ class KVDatabase:
         import urllib.parse
         encoded = urllib.parse.quote(json.dumps(trade), safe='')
         self._execute_command("rpush", "daytrade:microtrades", encoded)
+        self._execute_command("rpush", "daytrade:trades", encoded)
 
     def get_daytrade_microtrades(self) -> list:
         """Retorna a lista de micro-trades da sessão."""

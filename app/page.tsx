@@ -19,6 +19,7 @@ export default async function DashboardPage() {
     activeDirective,
     accountBalancesRaw,
     daytradeSessionRaw,
+    daytradeMicrotradesRaw,
     daytradeTradesRaw,
   ] = await Promise.all([
     redis.get<any>('portfolio:open_positions'),
@@ -28,7 +29,8 @@ export default async function DashboardPage() {
     redis.get<string>('ai:user_directives'),
     redis.get<any>('portfolio:account_balances'),
     redis.get<any>('daytrade:session'),
-    redis.lrange<any>('daytrade:trades', 0, 40),
+    redis.lrange<any>('daytrade:microtrades', -40, -1),
+    redis.lrange<any>('daytrade:trades', -40, -1),
   ])
 
   // Como o Python salva com urllib.parse.quote, precisamos de-codificar o URL (ex: %7B vira {) antes do JSON parse
@@ -50,7 +52,10 @@ export default async function DashboardPage() {
   
   // Sessão e Micro-trades de Day Trade
   const daytradeSession = safeParse(daytradeSessionRaw, null)
-  const daytradeTrades = (daytradeTradesRaw || []).map((t: any) => safeParse(t, {})).reverse()
+  const rawTradesList = (daytradeMicrotradesRaw && daytradeMicrotradesRaw.length > 0)
+    ? daytradeMicrotradesRaw
+    : (daytradeTradesRaw || [])
+  const daytradeTrades = rawTradesList.map((t: any) => safeParse(t, {})).reverse()
   
   // Para arrays vindos do Upstash
   const auditLogs = (auditLogsRaw || []).map((log: any) => safeParse(log, {}))

@@ -120,17 +120,24 @@ class SniperTraderAgent:
                     status_desc = f"COMPRADO ({unrealized_pct:+.2f}%)"
 
                 snapshot = {
-                    "timestamp": int(now),
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "seconds_elapsed": elapsed_sec,
                     "elapsed_sec": elapsed_sec,
                     "elapsed_str": f"{elapsed_sec // 60:02d}:{elapsed_sec % 60:02d}",
+                    "symbol": self.symbol,
                     "pair": self.symbol,
+                    "in_position": active_position is not None,
                     "status": status_desc,
+                    "state": status_desc,
                     "in_grace_period": in_grace_period,
                     "current_price": cur_p,
                     "entry_price": active_position['entry_price'] if active_position else None,
-                    "unrealized_fiat": round(unrealized_fiat, 2),
+                    "unrealized_pnl_pct": round(unrealized_pct, 2),
                     "unrealized_pct": round(unrealized_pct, 2),
-                    "rsi7": ta_data.get("rsi7", 50.0)
+                    "unrealized_fiat": round(unrealized_fiat, 2),
+                    "rsi": round(ta_data.get("rsi7", 50.0), 1),
+                    "rsi7": round(ta_data.get("rsi7", 50.0), 1),
+                    "vwap": round(ta_data.get("vwap", 0.0), 2)
                 }
                 kv_db.save_daytrade_snapshot(snapshot)
                 print(f"[Sniper Snapshot {snapshot['elapsed_str']}] {self.symbol} @ {cur_p:.2f} | {status_desc} | RSI: {snapshot['rsi7']:.1f}")
@@ -146,6 +153,15 @@ class SniperTraderAgent:
                 # Atualiza máxima para Trailing Stop
                 if cur_price > active_position['highest_price']:
                     active_position['highest_price'] = cur_price
+
+                # Sincroniza em tempo real com o Frontend
+                session_info["in_position"] = True
+                session_info["current_price"] = cur_price
+                session_info["entry_price"] = entry_price
+                session_info["position_qty"] = active_position['crypto_qty']
+                session_info["position_pnl_pct"] = round(pnl_pct, 2)
+                session_info["trades_count"] = len(trades_history)
+                kv_db.update_daytrade_session(session_info)
 
                 # Trailing Stop: se bateu +0.5%, não aceita sair abaixo do breakeven
                 gain_from_top = ((cur_price - active_position['highest_price']) / active_position['highest_price']) * 100
@@ -192,27 +208,41 @@ class SniperTraderAgent:
                             print(f"[Sniper] Erro ao executar venda na corretora: {e}")
 
                     gross_pnl = (sell_amount * cur_price) - active_position['entry_cost']
-                    # Desconta taxa aproximada da Binance (0.1% compra + 0.1% venda = 0.2%)
                     fee = (active_position['entry_cost'] + (sell_amount * cur_price)) * 0.001
                     net_pnl = gross_pnl - fee
                     session_capital += net_pnl
 
-                    trade_record = {
+                    sell_record = {
+                        "action": "SELL",
+                        "type": "SELL",
                         "pair": self.symbol,
+                        "symbol": self.symbol,
+                        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "buy_time": active_position['buy_time'],
                         "sell_time": time.strftime("%H:%M:%S"),
                         "duration_sec": int(now - active_position['buy_timestamp']),
+                        "price": cur_price,
                         "buy_price": entry_price,
                         "sell_price": cur_price,
+                        "qty": sell_amount,
                         "crypto_qty": sell_amount,
+                        "amount": round(sell_amount * cur_price, 2),
                         "pnl_pct": round(pnl_pct, 2),
                         "net_pnl_fiat": round(net_pnl, 2),
                         "currency": self.currency,
-                        "exit_reason": exit_reason
+                        "exit_reason": exit_reason,
+                        "reason": exit_reason
                     }
-                    trades_history.append(trade_record)
-                    kv_db.record_daytrade_microtrade(trade_record)
+                    trades_history.append(sell_record)
+                    kv_db.record_daytrade_microtrade(sell_record)
                     active_position = None
+
+                    session_info["in_position"] = False
+                    session_info["position_pnl_pct"] = 0.0
+                    session_info["trades_count"] = len(trades_history)
+                    total_pnl_acc = round(sum(t.get("net_pnl_fiat", 0) for t in trades_history), 2)
+                    session_info["total_pnl_pct"] = round((total_pnl_acc / self.capital) * 100, 2) if self.capital > 0 else 0.0
+                    kv_db.update_daytrade_session(session_info)
 
             # 4. Busca Sinal de Entrada (se não tiver posição e ainda tiver tempo hábil)
             elif elapsed_sec < (self.session_duration_sec - 60):  # Não abre trade nos últimos 60s
@@ -245,15 +275,20 @@ class SniperTraderAgent:
 
                     print(f"[Sniper] 🚀 SINAL DE COMPRA: {trigger_name} | {crypto_qty} {self.symbol} por ${trade_cost:.2f}")
                     
+                    order_success = False
                     if not self.dry_run:
                         try:
                             self.exchange.create_market_buy_order(self.symbol, crypto_qty)
+                            order_success = True
                         except Exception as e:
                             print(f"[Sniper] Falha na ordem de compra: {e}")
                             try:
                                 self.exchange.create_market_buy_order(self.symbol, None, params={'quoteOrderQty': trade_cost})
+                                order_success = True
                             except Exception as e2:
-                                print(f"[Sniper] Falha também com quoteOrderQty: {e2}")
+                                print(f"[Sniper] Falha também com quoteOrderQty (saldo insuficiente na Binance): {e2}")
+                    else:
+                        order_success = True
 
                     active_position = {
                         "symbol": self.symbol,
@@ -265,6 +300,30 @@ class SniperTraderAgent:
                         "buy_timestamp": now,
                         "buy_time": time.strftime("%H:%M:%S")
                     }
+
+                    buy_record = {
+                        "action": "BUY",
+                        "type": "BUY",
+                        "pair": self.symbol,
+                        "symbol": self.symbol,
+                        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "time": time.strftime("%H:%M:%S"),
+                        "price": cur_price,
+                        "qty": crypto_qty,
+                        "amount": trade_cost,
+                        "currency": self.currency,
+                        "reason": trigger_name,
+                        "pnl_pct": 0.0
+                    }
+                    kv_db.record_daytrade_microtrade(buy_record)
+
+                    session_info["in_position"] = True
+                    session_info["current_price"] = cur_price
+                    session_info["entry_price"] = cur_price
+                    session_info["position_qty"] = crypto_qty
+                    session_info["position_pnl_pct"] = 0.0
+                    session_info["trades_count"] = len(trades_history) + 1
+                    kv_db.update_daytrade_session(session_info)
 
             # 5. Condição de Término da Sessão
             max_total_time = self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)

@@ -311,11 +311,25 @@ class SniperTraderAgent:
             )
 
         active_positions = {}  # { symbol: position_data }
+        all_session_positions = {}  # Preserva histórico de todas as posições da sessão
         trades_history = []
         last_snapshot_time = 0.0
         last_hold_thoughts = {}
         session_capital = self.capital
         in_grace_period = False
+
+        # Salva alocação no Redis imediatamente para visibilidade no frontend
+        session_info["allocated_targets"] = [
+            {
+                "symbol": t['symbol'],
+                "capital": t['allocated_capital'],
+                "min_cost": t['min_cost'],
+                "price": t['price'],
+                "setup": t.get('setup', 'Scalping')
+            }
+            for t in allocated_targets
+        ]
+        kv_db.update_daytrade_session(session_info)
 
         # 3. Disparo das Compras Iniciais para cada ativo selecionado
         for t in allocated_targets:
@@ -364,7 +378,7 @@ class SniperTraderAgent:
             breakeven_calc = round(cur_price * 1.002002, 8)
             target_calc = round(cur_price * 1.0070, 8)
 
-            active_positions[sym] = {
+            pos_entry = {
                 "symbol": sym,
                 "entry_price": cur_price,
                 "current_price": cur_price,
@@ -377,7 +391,10 @@ class SniperTraderAgent:
                 "in_position": True,
                 "breakeven_price": breakeven_calc,
                 "target_price": target_calc,
+                "closed": False,
             }
+            active_positions[sym] = pos_entry
+            all_session_positions[sym] = pos_entry.copy()
 
         # 4. Loop de Gestão Concorrente / Assíncrona Tick-a-Tick (3s)
         while True:
@@ -409,11 +426,15 @@ class SniperTraderAgent:
                     cur_p = pos['current_price']
 
                 pos['current_price'] = cur_p
+                if sym in all_session_positions:
+                    all_session_positions[sym]['current_price'] = cur_p
                 entry_p = pos['entry_price']
                 breakeven_p = pos.get('breakeven_price', entry_p * 1.002002)
                 target_p = pos.get('target_price', entry_p * 1.0070)
                 pnl_pct = ((cur_p - entry_p) / entry_p) * 100
                 pos['pnl_pct'] = round(pnl_pct, 2)
+                if sym in all_session_positions:
+                    all_session_positions[sym]['pnl_pct'] = round(pnl_pct, 2)
 
                 if cur_p > pos['highest_price']:
                     pos['highest_price'] = cur_p
@@ -520,6 +541,15 @@ class SniperTraderAgent:
                 }
                 trades_history.append(sell_record)
                 kv_db.record_daytrade_microtrade(sell_record)
+
+                if sym in all_session_positions:
+                    all_session_positions[sym]['closed'] = True
+                    all_session_positions[sym]['exit_price'] = cur_p
+                    all_session_positions[sym]['exit_reason'] = exit_reason
+                    all_session_positions[sym]['pnl_pct'] = round(pnl_pct, 2)
+                    all_session_positions[sym]['net_pnl_fiat'] = round(net_pnl, 2)
+                    all_session_positions[sym]['current_price'] = cur_p
+
                 del active_positions[sym]
 
             # C. Atualiza o estado da sessão no Redis para o Frontend a cada tick
@@ -529,6 +559,7 @@ class SniperTraderAgent:
 
             session_info["in_position"] = len(active_positions) > 0
             session_info["positions"] = active_positions
+            session_info["all_positions"] = all_session_positions
             session_info["position_pnl_pct"] = overall_pnl_pct
             session_info["trades_count"] = len(trades_history)
             session_info["total_pnl_pct"] = overall_pnl_pct
@@ -539,9 +570,9 @@ class SniperTraderAgent:
             if (now - last_snapshot_time) >= self.snapshot_interval_sec:
                 last_snapshot_time = now
                 # Ativo prioritário para o gráfico
-                primary_pos = list(active_positions.values())[0] if active_positions else None
+                primary_pos = list(active_positions.values())[0] if active_positions else (list(all_session_positions.values())[0] if all_session_positions else None)
                 primary_sym = primary_pos['symbol'] if primary_pos else (allocated_targets[0]['symbol'] if allocated_targets else 'MULTI')
-                primary_price = primary_pos['current_price'] if primary_pos else (scored[0]['price'] if scored else 0.0)
+                primary_price = primary_pos['current_price'] if primary_pos else 0.0
 
                 snapshot = {
                     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -567,14 +598,15 @@ class SniperTraderAgent:
                             "breakeven_price": pos.get('breakeven_price', round(pos['entry_price'] * 1.002002, 8)),
                             "target_price": pos.get('target_price', round(pos['entry_price'] * 1.0070, 8)),
                             "pnl_pct": pos['pnl_pct'],
-                            "is_above_target": pos['current_price'] >= pos.get('target_price', pos['entry_price'] * 1.0070)
+                            "is_above_target": pos['current_price'] >= pos.get('target_price', pos['entry_price'] * 1.0070),
+                            "closed": pos.get("closed", False)
                         }
-                        for sym, pos in active_positions.items()
+                        for sym, pos in all_session_positions.items()
                     },
                     "in_grace_period": in_grace_period
                 }
                 kv_db.save_daytrade_snapshot(snapshot)
-                print(f"[Sniper Snapshot {snapshot['elapsed_str']}] Posições Abertas: {len(active_positions)} | PnL Geral: {overall_pnl_pct:+.2f}%")
+                print(f"[Sniper Snapshot {snapshot['elapsed_str']}] Posições Abertas: {len(active_positions)}/{len(all_session_positions)} | PnL Geral: {overall_pnl_pct:+.2f}%")
 
             # E. Término da Sessão
             max_allowed_time = self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)

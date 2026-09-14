@@ -896,6 +896,9 @@ export default function SniperDaytradePanel() {
             entryPrice={session?.entry_price}
             inPosition={session?.in_position}
             currency={currency}
+            sessionPositions={session?.positions}
+            allocatedTargets={session?.allocated_targets}
+            microtrades={microtrades}
           />
         )}
 

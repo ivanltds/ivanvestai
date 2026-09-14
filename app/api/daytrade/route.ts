@@ -32,7 +32,7 @@ export async function GET() {
     ] = await Promise.all([
       redis.get<any>('daytrade:session'),
       redis.get<any>('daytrade:last_cycle_timestamp'),
-      redis.lrange<any>('daytrade:snapshots', -30, -1),
+      redis.lrange<any>('daytrade:snapshots', -100, -1),
       redis.lrange<any>('daytrade:microtrades', -50, -1),
       redis.lrange<any>('daytrade:trades', -50, -1),
       redis.get<any>('portfolio:account_balances'),

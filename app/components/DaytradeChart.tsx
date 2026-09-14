@@ -20,6 +20,7 @@ export interface PositionData {
   target_price?: number
   pnl_pct?: number
   is_above_target?: boolean
+  closed?: boolean
 }
 
 export interface Snapshot {
@@ -41,6 +42,9 @@ interface DaytradeChartProps {
   entryPrice?: number | null
   inPosition?: boolean
   currency?: string
+  sessionPositions?: Record<string, any>
+  allocatedTargets?: Array<{ symbol: string; [key: string]: any }>
+  microtrades?: Array<{ symbol?: string; pair?: string; action?: string; price?: number; [key: string]: any }>
 }
 
 export default function DaytradeChart({
@@ -48,6 +52,9 @@ export default function DaytradeChart({
   entryPrice: propEntryPrice,
   inPosition,
   currency = 'USDT',
+  sessionPositions,
+  allocatedTargets,
+  microtrades,
 }: DaytradeChartProps) {
   const [mounted, setMounted] = useState(false)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
@@ -66,9 +73,31 @@ export default function DaytradeChart({
     })
   }, [snapshots])
 
-  // Identifica todos os símbolos únicos presentes nos snapshots
+  // Identifica todos os símbolos de posições da sessão combinando todas as fontes
   const availableSymbols = useMemo(() => {
     const syms = new Set<string>()
+
+    // 1. Dos alvos selecionados pelo Scanner Sniper no início da sessão
+    if (allocatedTargets && Array.isArray(allocatedTargets)) {
+      allocatedTargets.forEach((t) => {
+        if (t.symbol) syms.add(t.symbol)
+      })
+    }
+
+    // 2. Das posições ativas da sessão
+    if (sessionPositions && typeof sessionPositions === 'object') {
+      Object.keys(sessionPositions).forEach((sym) => syms.add(sym))
+    }
+
+    // 3. Dos microtrades executados (BUY ou SELL)
+    if (microtrades && Array.isArray(microtrades)) {
+      microtrades.forEach((t) => {
+        const sym = t.symbol || t.pair
+        if (sym) syms.add(sym)
+      })
+    }
+
+    // 4. Dos snapshots registrados
     sortedSnapshots.forEach((s) => {
       if (s.positions_data) {
         Object.keys(s.positions_data).forEach((sym) => syms.add(sym))
@@ -77,8 +106,9 @@ export default function DaytradeChart({
         syms.add(s.symbol)
       }
     })
+
     return Array.from(syms)
-  }, [sortedSnapshots])
+  }, [sortedSnapshots, sessionPositions, allocatedTargets, microtrades])
 
   // Ativo atualmente selecionado para inspeção
   const activeSymbol = selectedSymbol && availableSymbols.includes(selectedSymbol)
@@ -86,24 +116,60 @@ export default function DaytradeChart({
     : (availableSymbols[0] || sortedSnapshots[sortedSnapshots.length - 1]?.symbol || 'ALT/USDT')
 
   // Extrai preços e linhas de referência determinísticas para o ativo selecionado
-  const { activeEntryPrice, activeBreakevenPrice, activeTargetPrice, latestPrice } = useMemo(() => {
-    let entryP: number | null = propEntryPrice || null
+  const { activeEntryPrice, activeBreakevenPrice, activeTargetPrice, latestPrice, isPositionClosed } = useMemo(() => {
+    let entryP: number | null = null
     let latestP = 0
+    let closed = false
 
+    // 1. Busca em sessionPositions
+    if (sessionPositions && sessionPositions[activeSymbol]) {
+      const pos = sessionPositions[activeSymbol]
+      entryP = pos.entry_price || null
+      latestP = pos.current_price || 0
+      closed = !!pos.closed
+    }
+
+    // 2. Busca nos snapshots (do mais recente para o mais antigo)
     for (let i = sortedSnapshots.length - 1; i >= 0; i--) {
       const s = sortedSnapshots[i]
       if (s.positions_data && s.positions_data[activeSymbol]) {
         const pData = s.positions_data[activeSymbol]
-        if (!latestP) latestP = pData.current_price
-        if (!entryP) entryP = pData.entry_price
+        if (!latestP && pData.current_price) latestP = pData.current_price
+        if (!entryP && pData.entry_price) entryP = pData.entry_price
+        if (pData.closed) closed = true
       } else if (s.symbol === activeSymbol) {
-        if (!latestP) latestP = s.current_price || 0
+        if (!latestP && s.current_price) latestP = s.current_price
         if (!entryP && s.entry_price) entryP = s.entry_price
       }
     }
 
-    if (!latestP && sortedSnapshots.length > 0) {
-      latestP = sortedSnapshots[sortedSnapshots.length - 1]?.current_price || 0
+    // 3. Busca em microtrades
+    if (microtrades && Array.isArray(microtrades)) {
+      for (const t of microtrades) {
+        const sym = t.symbol || t.pair
+        if (sym === activeSymbol) {
+          if (!entryP && t.action === 'BUY' && t.price) entryP = t.price
+          if (!latestP && t.price) latestP = t.price
+          if (t.action === 'SELL') closed = true
+        }
+      }
+    }
+
+    // 4. Busca em allocatedTargets
+    if (allocatedTargets && Array.isArray(allocatedTargets)) {
+      const target = allocatedTargets.find((t) => t.symbol === activeSymbol)
+      if (target) {
+        if (!entryP && target.price) entryP = target.price
+        if (!latestP && target.price) latestP = target.price
+      }
+    }
+
+    if (!entryP && propEntryPrice && sortedSnapshots[sortedSnapshots.length - 1]?.symbol === activeSymbol) {
+      entryP = propEntryPrice
+    }
+
+    if (!latestP && entryP) {
+      latestP = entryP
     }
 
     // Cálculos estritamente determinísticos de taxas da Binance Spot
@@ -117,8 +183,133 @@ export default function DaytradeChart({
       activeBreakevenPrice: breakevenP,
       activeTargetPrice: targetP,
       latestPrice: latestP,
+      isPositionClosed: closed,
     }
-  }, [sortedSnapshots, activeSymbol, propEntryPrice])
+  }, [sortedSnapshots, activeSymbol, sessionPositions, allocatedTargets, microtrades, propEntryPrice])
+
+  // Detecção automática da moeda da cotação com base no par (ex: SOL/BRL -> R$, SOL/USDT -> $)
+  const isBrl = activeSymbol.endsWith('/BRL') || (!activeSymbol.endsWith('/USDT') && currency === 'BRL')
+
+  const formatCurrency = (val?: number | null) => {
+    if (val === undefined || val === null || isNaN(val)) {
+      return isBrl ? 'R$ 0,00' : '$ 0,00 USDT'
+    }
+    const decimals = Math.abs(val) < 0.001 ? 8 : Math.abs(val) < 1 ? 4 : 2
+    if (isBrl) {
+      return val.toLocaleString('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: decimals,
+      })
+    }
+    return `$ ${val.toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: decimals,
+    })} USDT`
+  }
+
+  // DIRETRIZ DO INVESTIDOR:
+  // "estar em loss ou lucro e a linha ser vermelha ou verde tbm deve se basear na linha de meta da posição."
+  const isPos = inPosition || (sessionPositions && Object.keys(sessionPositions).length > 0)
+  const isAboveTarget = activeTargetPrice && latestPrice ? latestPrice >= activeTargetPrice : false
+
+  let chartColor = '#38bdf8' // Padrão neutro
+  if (isPos && activeTargetPrice) {
+    chartColor = isAboveTarget ? '#10b981' : '#f43f5e'
+  } else if (isPositionClosed && activeTargetPrice) {
+    chartColor = isAboveTarget ? '#10b981' : '#a3a3a3'
+  }
+
+  // Formatação dos pontos do gráfico com proteção contra ruídos e quedas a 0
+  const chartData = useMemo(() => {
+    let lastKnownPrice = activeEntryPrice || 0
+
+    return sortedSnapshots.map((s, idx) => {
+      let timeStr = `T+${idx * 30}s`
+      if (s.timestamp) {
+        const d = new Date(s.timestamp)
+        if (!isNaN(d.getTime())) {
+          timeStr = d.toLocaleTimeString('pt-BR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })
+        }
+      }
+
+      let p: number | null = null
+      let pnl = 0
+
+      if (s.positions_data && s.positions_data[activeSymbol]) {
+        p = s.positions_data[activeSymbol].current_price
+        pnl = s.positions_data[activeSymbol].pnl_pct || 0
+      } else if (s.symbol === activeSymbol && s.current_price) {
+        p = s.current_price
+        pnl = s.unrealized_pnl_pct || 0
+      }
+
+      // Validação anti-contaminação: descarta preços de outras moedas que diferem em mais de 25%
+      if (p !== null && activeEntryPrice && activeEntryPrice > 0) {
+        const diff = Math.abs(p - activeEntryPrice) / activeEntryPrice
+        if (diff > 0.25) {
+          p = null
+        }
+      }
+
+      if (p !== null && p > 0) {
+        lastKnownPrice = p
+      } else if (lastKnownPrice > 0) {
+        p = lastKnownPrice
+      }
+
+      return {
+        time: timeStr,
+        price: p,
+        entryPrice: activeEntryPrice,
+        breakevenPrice: activeBreakevenPrice,
+        targetPrice: activeTargetPrice,
+        pnlPct: pnl,
+        rsi: s.rsi,
+      }
+    })
+  }, [sortedSnapshots, activeSymbol, activeEntryPrice, activeBreakevenPrice, activeTargetPrice])
+
+  // Domínio dinâmico do eixo Y estritamente calibrado para o ativo ativo
+  const yDomain = useMemo(() => {
+    const validPrices: number[] = []
+
+    if (activeEntryPrice && activeEntryPrice > 0) validPrices.push(activeEntryPrice)
+    if (activeBreakevenPrice && activeBreakevenPrice > 0) validPrices.push(activeBreakevenPrice)
+    if (activeTargetPrice && activeTargetPrice > 0) validPrices.push(activeTargetPrice)
+    if (latestPrice && latestPrice > 0) validPrices.push(latestPrice)
+
+    chartData.forEach((d) => {
+      if (typeof d.price === 'number' && d.price > 0) {
+        if (activeEntryPrice && activeEntryPrice > 0) {
+          const diff = Math.abs(d.price - activeEntryPrice) / activeEntryPrice
+          if (diff <= 0.15) {
+            validPrices.push(d.price)
+          }
+        } else {
+          validPrices.push(d.price)
+        }
+      }
+    })
+
+    const minP = validPrices.length > 0 ? Math.min(...validPrices) : 100
+    const maxP = validPrices.length > 0 ? Math.max(...validPrices) : 101
+    const span = maxP - minP
+
+    // Espaço visual de pelo menos 0.35% do preço para que Compra, Breakeven e Meta fiquem bem destacadas
+    const baseRef = activeEntryPrice || minP
+    const padding = Math.max(span * 0.45, baseRef * 0.004)
+
+    const yMin = Number((minP - padding).toFixed(minP < 1 ? 4 : 2))
+    const yMax = Number((maxP + padding).toFixed(minP < 1 ? 4 : 2))
+
+    return [Math.max(0, yMin), yMax] as [number, number]
+  }, [chartData, activeEntryPrice, activeBreakevenPrice, activeTargetPrice, latestPrice])
 
   if (!mounted) {
     return (
@@ -137,79 +328,14 @@ export default function DaytradeChart({
     )
   }
 
-  // DIRETRIZ DO INVESTIDOR:
-  // "estar em loss ou lucro e a linha ser vermelha ou verde tbm deve se basear na linha de meta da posição."
-  const isPos = inPosition || sortedSnapshots[sortedSnapshots.length - 1]?.in_position
-  const isAboveTarget = activeTargetPrice ? latestPrice >= activeTargetPrice : false
-
-  let chartColor = '#38bdf8' // Padrão neutro quando não posicionado
-  if (isPos && activeTargetPrice) {
-    chartColor = isAboveTarget ? '#10b981' : '#f43f5e'
-  }
-
-  // Formatação dos pontos do gráfico
-  const chartData = sortedSnapshots.map((s, idx) => {
-    let timeStr = `T+${idx * 30}s`
-    if (s.timestamp) {
-      const d = new Date(s.timestamp)
-      if (!isNaN(d.getTime())) {
-        timeStr = d.toLocaleTimeString('pt-BR', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      }
-    }
-
-    let p = s.current_price || 0
-    let pnl = s.unrealized_pnl_pct || 0
-
-    if (s.positions_data && s.positions_data[activeSymbol]) {
-      p = s.positions_data[activeSymbol].current_price
-      pnl = s.positions_data[activeSymbol].pnl_pct || 0
-    }
-
-    return {
-      time: timeStr,
-      price: p,
-      entryPrice: activeEntryPrice,
-      breakevenPrice: activeBreakevenPrice,
-      targetPrice: activeTargetPrice,
-      pnlPct: pnl,
-      rsi: s.rsi,
-    }
-  })
-
-  // Domínio dinâmico do eixo Y considerando entrada, taxas, meta e preços
-  const allPrices = chartData.map((d) => d.price).filter((p) => p && p > 0)
-  if (activeEntryPrice) allPrices.push(activeEntryPrice)
-  if (activeBreakevenPrice) allPrices.push(activeBreakevenPrice)
-  if (activeTargetPrice) allPrices.push(activeTargetPrice)
-
-  const minPrice = allPrices.length > 0 ? Math.min(...allPrices) : 0
-  const maxPrice = allPrices.length > 0 ? Math.max(...allPrices) : 0
-  const padding = (maxPrice - minPrice) * 0.20 || minPrice * 0.001
-  const yDomain = minPrice > 1
-    ? [Math.floor(minPrice - padding), Math.ceil(maxPrice + padding)]
-    : [Math.max(0, minPrice - padding), maxPrice + padding]
-
-  const formatCurrency = (val?: number | null) => {
-    if (!val || isNaN(val)) return currency === 'USDT' ? '$ 0,00' : 'R$ 0,00'
-    const decimals = Math.abs(val) < 0.001 ? 8 : Math.abs(val) < 1 ? 4 : 2
-    if (currency === 'USDT' || currency === 'USD') {
-      return `$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: decimals })} USDT`
-    }
-    return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: decimals })
-  }
-
   return (
     <div className="space-y-3">
       {/* Top Bar do Gráfico com Filtro na Legenda e Status baseado na Meta */}
       <div className="flex justify-between items-center flex-wrap gap-2 px-1">
         <div className="flex items-center gap-2 flex-wrap">
-          {/* FILTRO DE POSIÇÕES NA LEGENDA */}
-          {availableSymbols.length > 1 && (
-            <div className="flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5 text-xs font-mono mr-2">
+          {/* FILTRO DE POSIÇÕES NA LEGENDA (Mostra todas as 3+ posições da sessão) */}
+          {availableSymbols.length > 0 && (
+            <div className="flex rounded-lg border border-neutral-800 bg-neutral-900 p-0.5 text-xs font-mono mr-2 flex-wrap gap-1">
               {availableSymbols.map((sym) => {
                 const isSel = sym === activeSymbol
                 return (
@@ -248,7 +374,11 @@ export default function DaytradeChart({
 
         {/* Status de Lucro Baseado Estritamente na Linha de Meta */}
         <div>
-          {isPos ? (
+          {isPositionClosed ? (
+            <span className="text-xs font-mono text-neutral-400 bg-neutral-900 px-3 py-1 rounded-md border border-neutral-800 flex items-center gap-1.5 font-bold">
+              <span>🏁 POSIÇÃO ENCERRADA</span>
+            </span>
+          ) : isPos ? (
             <span
               className={`text-xs font-mono font-extrabold px-3 py-1 rounded-md border flex items-center gap-1.5 ${
                 isAboveTarget
@@ -274,7 +404,7 @@ export default function DaytradeChart({
       </div>
 
       {/* LEGENDA DETERMINÍSTICA DAS TRÊS LINHAS */}
-      <div className="flex items-center gap-3 px-2 py-1.5 rounded-lg bg-neutral-950/60 border border-neutral-850 text-[11px] font-mono flex-wrap">
+      <div className="flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-neutral-950/60 border border-neutral-800 text-[11px] font-mono flex-wrap">
         {/* Linha de Compra */}
         {activeEntryPrice && (
           <div className="flex items-center gap-1.5 text-amber-400">
@@ -300,10 +430,10 @@ export default function DaytradeChart({
         )}
       </div>
 
-      {/* Gráfico de Linha Recharts com Três Linhas de Referência */}
+      {/* Gráfico de Linha Recharts com Três Linhas de Referência Espaçadas */}
       <div className="w-full h-64 bg-neutral-950/80 rounded-xl border border-neutral-800/80 p-3 pt-4">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={chartData} margin={{ top: 10, right: 25, left: 10, bottom: 0 }}>
+          <ComposedChart data={chartData} margin={{ top: 15, right: 30, left: 10, bottom: 0 }}>
             <defs>
               <linearGradient id="colorPriceDynamic" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor={chartColor} stopOpacity={0.25} />
@@ -324,9 +454,9 @@ export default function DaytradeChart({
               tickLine={false}
               tickFormatter={(v) => {
                 const n = Number(v)
-                return n < 0.001 ? n.toFixed(6) : n < 1 ? n.toFixed(3) : n.toLocaleString('pt-BR', { maximumFractionDigits: 1 })
+                return n < 0.001 ? n.toFixed(6) : n < 1 ? n.toFixed(4) : n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
               }}
-              width={75}
+              width={80}
             />
 
             <Tooltip
@@ -373,39 +503,39 @@ export default function DaytradeChart({
               }}
             />
 
-            {/* 1. LINHA DE COMPRA (Amarela tracejada) */}
+            {/* 1. LINHA DE COMPRA (Amarela tracejada - Rótulo na parte inferior esquerda) */}
             {activeEntryPrice && (
               <ReferenceLine
                 y={activeEntryPrice}
                 stroke="#f59e0b"
-                strokeDasharray="3 3"
-                strokeWidth={1.5}
-                label={{
-                  value: 'COMPRA',
-                  fill: '#f59e0b',
-                  fontSize: 9,
-                  position: 'insideTopRight',
-                }}
-              />
-            )}
-
-            {/* 2. LINHA DE TAXAS (Breakeven 0.20% - Branca/Cinza tracejada) */}
-            {activeBreakevenPrice && (
-              <ReferenceLine
-                y={activeBreakevenPrice}
-                stroke="#a3a3a3"
                 strokeDasharray="4 4"
                 strokeWidth={1.5}
                 label={{
-                  value: 'TAXAS (BREAKEVEN)',
-                  fill: '#a3a3a3',
-                  fontSize: 9,
-                  position: 'insideTopRight',
+                  value: `COMPRA: ${formatCurrency(activeEntryPrice)}`,
+                  fill: '#f59e0b',
+                  fontSize: 10,
+                  position: 'insideBottomLeft',
                 }}
               />
             )}
 
-            {/* 3. LINHA DE META (Lucro Real - Verde tracejada) */}
+            {/* 2. LINHA DE TAXAS (Breakeven 0.20% - Cinza tracejada - Rótulo na parte superior esquerda) */}
+            {activeBreakevenPrice && (
+              <ReferenceLine
+                y={activeBreakevenPrice}
+                stroke="#d4d4d8"
+                strokeDasharray="3 3"
+                strokeWidth={1.5}
+                label={{
+                  value: `TAXAS (+0.20%): ${formatCurrency(activeBreakevenPrice)}`,
+                  fill: '#d4d4d8',
+                  fontSize: 10,
+                  position: 'insideTopLeft',
+                }}
+              />
+            )}
+
+            {/* 3. LINHA DE META (Lucro Real - Verde tracejada - Rótulo na parte superior direita) */}
             {activeTargetPrice && (
               <ReferenceLine
                 y={activeTargetPrice}
@@ -413,9 +543,9 @@ export default function DaytradeChart({
                 strokeDasharray="5 3"
                 strokeWidth={2}
                 label={{
-                  value: 'META (LUCRO REAL)',
+                  value: `META (+0.70%): ${formatCurrency(activeTargetPrice)}`,
                   fill: '#10b981',
-                  fontSize: 9,
+                  fontSize: 10,
                   position: 'insideTopRight',
                 }}
               />
@@ -437,6 +567,7 @@ export default function DaytradeChart({
               strokeWidth={2.5}
               dot={{ r: 2, fill: chartColor }}
               activeDot={{ r: 5, stroke: '#fff', strokeWidth: 1.5, fill: chartColor }}
+              connectNulls={true}
               isAnimationActive={false}
             />
           </ComposedChart>

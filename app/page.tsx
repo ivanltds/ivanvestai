@@ -144,6 +144,38 @@ export default async function DashboardPage() {
               <p className="text-sm opacity-90 leading-relaxed">{sentiment.summary}</p>
             </div>
           </section>
+
+          {auditLogs.length > 0 && auditLogs[0].news_sources && auditLogs[0].news_sources.length > 0 && (
+            <section className="bg-neutral-900/50 rounded-2xl border border-neutral-800 p-6 backdrop-blur-sm">
+              <h2 className="text-xl font-bold text-white mb-4 flex items-center">
+                <span className="w-2 h-2 rounded-full bg-purple-500 mr-2 animate-pulse"></span>
+                Live News Feed
+              </h2>
+              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                {auditLogs[0].news_sources.slice(0, 20).map((src: any, idx: number) => (
+                  <a 
+                    key={idx} 
+                    href={src.url} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="block p-3 rounded-xl border border-neutral-800 bg-neutral-950/50 hover:bg-neutral-800 hover:border-neutral-700 transition-all group"
+                  >
+                    <p className="text-sm text-neutral-300 group-hover:text-purple-400 transition-colors line-clamp-2">
+                      {src.title}
+                    </p>
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="text-[10px] text-neutral-500 font-mono uppercase">
+                        {new URL(src.url).hostname.replace('www.', '')}
+                      </span>
+                      <svg className="w-3 h-3 text-neutral-600 group-hover:text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </div>
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
 
         {/* COLUNA CENTRAL: O Diário de Bordo */}

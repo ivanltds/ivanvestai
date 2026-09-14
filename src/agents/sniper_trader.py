@@ -655,7 +655,8 @@ class SniperTraderAgent:
             "duration_str": f"{actual_duration_min} min",
             "in_grace_period_used": in_grace_period,
             "result_status": result_status,
-            "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            "finished_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "trades": trades_history
         }
 
         kv_db.save_daytrade_session_history(summary)

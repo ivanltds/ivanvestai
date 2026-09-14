@@ -394,11 +394,28 @@ class KVDatabase:
         return []
 
     def record_daytrade_microtrade(self, trade: dict):
-        """Registra um micro-trade de compra/venda concluído na sessão."""
+        """Registra um micro-trade de compra/venda concluído na sessão e no balanço diário."""
         import urllib.parse
         encoded = urllib.parse.quote(json.dumps(trade), safe='')
         self._execute_command("rpush", "daytrade:microtrades", encoded)
         self._execute_command("rpush", "daytrade:trades", encoded)
+        self._execute_command("rpush", "daytrade:daily_trades", encoded)
+        self._execute_command("ltrim", "daytrade:daily_trades", "-500", "-1")
+
+    def get_daytrade_daily_trades(self, limit: int = 200) -> list:
+        """Retorna as operações de daytrade do dia registradas no Redis."""
+        import urllib.parse
+        data = self._execute_command("lrange", "daytrade:daily_trades", f"-{limit}", "-1")
+        if data and isinstance(data, list):
+            res = []
+            for item in data:
+                try:
+                    decoded = urllib.parse.unquote(item) if isinstance(item, str) else item
+                    res.append(json.loads(decoded) if isinstance(decoded, str) else decoded)
+                except:
+                    pass
+            return res
+        return []
 
     def get_daytrade_microtrades(self) -> list:
         """Retorna a lista de micro-trades da sessão."""
@@ -422,6 +439,8 @@ class KVDatabase:
         session = self.get_daytrade_session() or {}
         session["status"] = summary.get("status", "completed")
         session["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if "trades" not in summary:
+            summary["trades"] = self.get_daytrade_microtrades()
         session["summary"] = summary
         encoded = urllib.parse.quote(json.dumps(session), safe='')
         self._execute_command("set", "daytrade:session", encoded)
@@ -476,6 +495,8 @@ class KVDatabase:
     def save_daytrade_session_history(self, summary: dict):
         """Salva o sumário pós-trade no histórico permanente de Day Trade para a IA aprender."""
         import urllib.parse
+        if "trades" not in summary:
+            summary["trades"] = self.get_daytrade_microtrades()
         encoded = urllib.parse.quote(json.dumps(summary), safe='')
         self._execute_command("lpush", "daytrade:history", encoded)
         self._execute_command("ltrim", "daytrade:history", "0", "49")

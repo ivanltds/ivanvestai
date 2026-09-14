@@ -24,6 +24,7 @@ export async function GET() {
       snapshotsRaw, 
       microtradesRaw, 
       tradesRaw,
+      dailyTradesRaw,
       accountBalancesRaw,
       openPositionsRaw,
       botConfigRaw,
@@ -35,11 +36,12 @@ export async function GET() {
       redis.lrange<any>('daytrade:snapshots', -100, -1),
       redis.lrange<any>('daytrade:microtrades', -50, -1),
       redis.lrange<any>('daytrade:trades', -50, -1),
+      redis.lrange<any>('daytrade:daily_trades', -300, -1),
       redis.get<any>('portfolio:account_balances'),
       redis.get<any>('portfolio:open_positions'),
       redis.get<any>('bot:config'),
       redis.lrange<any>('daytrade:chat', -100, -1),
-      redis.lrange<any>('daytrade:history', 0, 9),
+      redis.lrange<any>('daytrade:history', 0, 19),
     ])
 
     const session = safeParse(sessionRaw, null)
@@ -116,12 +118,104 @@ export async function GET() {
       estimatedWaitSeconds = 60 // Fallback estimado
     }
 
+    // =========================================================================
+    // Agregação do Balanço Diário de Operações Sniper (Ganhos e Perdas)
+    // =========================================================================
+    const todayUtc = new Date().toISOString().slice(0, 10)
+    let todayBrt = todayUtc
+    try {
+      todayBrt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date())
+    } catch {
+      todayBrt = todayUtc
+    }
+
+    const parsedDailyTrades = (dailyTradesRaw || []).map((t: any) => safeParse(t, {}))
+    const parsedStoredTrades = (tradesRaw || []).map((t: any) => safeParse(t, {}))
+    const parsedCurrentMicro = (microtradesRaw || []).map((t: any) => safeParse(t, {}))
+
+    const allCandidateTrades: any[] = [
+      ...parsedDailyTrades,
+      ...parsedStoredTrades,
+      ...parsedCurrentMicro,
+    ]
+
+    for (const h of daytradeHistory) {
+      if (Array.isArray(h?.trades)) {
+        for (const t of h.trades) {
+          allCandidateTrades.push(t)
+        }
+      }
+    }
+
+    const seenTradeKeys = new Set<string>()
+    const uniqueTodayTrades: any[] = []
+
+    for (const t of allCandidateTrades) {
+      if (!t || !t.timestamp) continue
+      const ts = String(t.timestamp)
+      const datePart = ts.slice(0, 10)
+      const tradeTimeMs = new Date(ts).getTime()
+      const isWithin24h = !isNaN(tradeTimeMs) && (Date.now() - tradeTimeMs) < 24 * 60 * 60 * 1000
+      const isDateMatch = datePart === todayUtc || datePart === todayBrt
+
+      if (isDateMatch || isWithin24h) {
+        const key = `${ts}_${t.symbol || t.pair}_${t.action || t.type}_${t.price}_${t.qty || t.crypto_qty}`
+        if (!seenTradeKeys.has(key)) {
+          seenTradeKeys.add(key)
+          uniqueTodayTrades.push({
+            ...t,
+            symbol: t.symbol || t.pair || 'DESCONHECIDO',
+            action: t.action || t.type || 'TRADE',
+            pnl_pct: typeof t.pnl_pct === 'number' ? t.pnl_pct : (parseFloat(t.pnl_pct) || 0),
+            net_pnl_fiat: typeof t.net_pnl_fiat === 'number' ? t.net_pnl_fiat : (parseFloat(t.net_pnl_fiat) || 0),
+            currency: t.currency || 'USDT',
+            price: typeof t.price === 'number' ? t.price : (parseFloat(t.price) || 0),
+            amount: typeof t.amount === 'number' ? t.amount : (parseFloat(t.amount) || 0),
+          })
+        }
+      }
+    }
+
+    // Ordena do mais recente para o mais antigo
+    uniqueTodayTrades.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+
+    // Filtra posições encerradas (vendas) para cálculo oficial de PnL financeiro
+    const sellTrades = uniqueTodayTrades.filter((t) => t.action === 'SELL')
+    const totalClosed = sellTrades.length
+    const winningTrades = sellTrades.filter((t) => t.net_pnl_fiat > 0).length
+    const losingTrades = sellTrades.filter((t) => t.net_pnl_fiat < 0).length
+    const breakevenTrades = sellTrades.filter((t) => t.net_pnl_fiat === 0).length
+    const winRatePct = totalClosed > 0 ? Math.round((winningTrades / totalClosed) * 1000) / 10 : 0
+
+    const netPnlBrl = Math.round(sellTrades.filter((t) => t.currency === 'BRL').reduce((acc, t) => acc + (t.net_pnl_fiat || 0), 0) * 100) / 100
+    const netPnlUsdt = Math.round(sellTrades.filter((t) => t.currency === 'USDT').reduce((acc, t) => acc + (t.net_pnl_fiat || 0), 0) * 100) / 100
+
+    const totalVolumeBrl = Math.round(uniqueTodayTrades.filter((t) => t.currency === 'BRL').reduce((acc, t) => acc + (t.amount || 0), 0) * 100) / 100
+    const totalVolumeUsdt = Math.round(uniqueTodayTrades.filter((t) => t.currency === 'USDT').reduce((acc, t) => acc + (t.amount || 0), 0) * 100) / 100
+
+    const dailySummary = {
+      date: todayBrt,
+      total_trades: totalClosed,
+      total_orders: uniqueTodayTrades.length,
+      winning_trades: winningTrades,
+      losing_trades: losingTrades,
+      breakeven_trades: breakevenTrades,
+      win_rate_pct: winRatePct,
+      net_pnl_brl: netPnlBrl,
+      net_pnl_usdt: netPnlUsdt,
+      total_volume_brl: totalVolumeBrl,
+      total_volume_usdt: totalVolumeUsdt,
+      trades: uniqueTodayTrades,
+      closed_trades: sellTrades,
+    }
+
     return NextResponse.json({
       session,
       estimatedWaitSeconds,
       lastCycleTs,
       snapshots,
       microtrades,
+      dailySummary,
       serverTime: now,
       walletAssets,
       chatMessages,
@@ -238,7 +332,6 @@ export async function POST(req: NextRequest) {
         redis.set('daytrade:session', JSON.stringify(session)),
         redis.del('daytrade:snapshots'),
         redis.del('daytrade:microtrades'),
-        redis.del('daytrade:trades'),
         redis.rpush('daytrade:chat', JSON.stringify(startMsg)),
       ])
       return NextResponse.json({ success: true, session })

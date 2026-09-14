@@ -81,16 +81,36 @@ interface MicroTrade {
   type: string
   action: 'BUY' | 'SELL'
   timestamp: string
+  time?: string
   symbol?: string
   pair?: string
   price: number
+  buy_price?: number
+  sell_price?: number
   qty: number
+  crypto_qty?: number
   amount: number
   currency: string
   reason?: string
   exit_reason?: string
   pnl_pct?: number
   net_pnl_fiat?: number
+}
+
+interface DailySummary {
+  date: string
+  total_trades: number
+  total_orders: number
+  winning_trades: number
+  losing_trades: number
+  breakeven_trades: number
+  win_rate_pct: number
+  net_pnl_brl: number
+  net_pnl_usdt: number
+  total_volume_brl: number
+  total_volume_usdt: number
+  trades: MicroTrade[]
+  closed_trades: MicroTrade[]
 }
 
 interface WalletAsset {
@@ -130,6 +150,12 @@ export default function SniperDaytradePanel() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'chat' | 'chart' | 'table'>('chat')
 
+  // Balanço Diário e Modal de Relatório
+  const [dailySummary, setDailySummary] = useState<DailySummary | null>(null)
+  const [isDailyReportOpen, setIsDailyReportOpen] = useState<boolean>(false)
+  const [dailyReportFilter, setDailyReportFilter] = useState<'all' | 'profit' | 'loss'>('all')
+  const [dailyReportSearch, setDailyReportSearch] = useState<string>('')
+
   // Polling dos dados da sessão a cada 3 segundos
   const fetchDaytradeState = useCallback(async () => {
     try {
@@ -140,6 +166,9 @@ export default function SniperDaytradePanel() {
       setSnapshots(data.snapshots || [])
       setMicrotrades(data.microtrades || [])
 
+      if (data.dailySummary) {
+        setDailySummary(data.dailySummary)
+      }
       if (data.chatMessages) {
         setChatMessages(data.chatMessages)
       }
@@ -169,6 +198,19 @@ export default function SniperDaytradePanel() {
     const interval = setInterval(fetchDaytradeState, 3000)
     return () => clearInterval(interval)
   }, [fetchDaytradeState])
+
+  // Listener da tecla Esc para fechar modal do relatório
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsDailyReportOpen(false)
+      }
+    }
+    if (isDailyReportOpen) {
+      window.addEventListener('keydown', handleKeyDown)
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isDailyReportOpen])
 
   // Ajusta a moeda padrão de acordo com o ativo selecionado
   const handleSelectSourceAsset = (asset: WalletAsset) => {
@@ -323,6 +365,24 @@ export default function SniperDaytradePanel() {
   // Resultado da última sessão (quanto ganhou ou perdeu)
   const lastOutcome: SessionOutcome | null = session?.summary || (daytradeHistory.length > 0 ? daytradeHistory[0] : null)
 
+  // Filtro de trades para o Relatório Diário
+  const filteredDailyTrades = (dailySummary?.trades || []).filter((t) => {
+    if (dailyReportFilter === 'profit') {
+      if (t.action !== 'SELL' || (t.net_pnl_fiat ?? 0) <= 0) return false
+    }
+    if (dailyReportFilter === 'loss') {
+      if (t.action !== 'SELL' || (t.net_pnl_fiat ?? 0) >= 0) return false
+    }
+    if (dailyReportSearch.trim()) {
+      const q = dailyReportSearch.trim().toUpperCase()
+      const sym = (t.symbol || t.pair || '').toUpperCase()
+      const curr = (t.currency || '').toUpperCase()
+      const reason = (t.exit_reason || t.reason || '').toUpperCase()
+      if (!sym.includes(q) && !curr.includes(q) && !reason.includes(q)) return false
+    }
+    return true
+  })
+
   return (
     <section className="bg-neutral-900/60 rounded-2xl border border-rose-950/40 p-6 backdrop-blur-md relative overflow-hidden shadow-[0_0_40px_rgba(244,63,94,0.05)]">
       {/* Luz neon de fundo sutil */}
@@ -372,6 +432,158 @@ export default function SniperDaytradePanel() {
           )}
         </div>
       </div>
+
+      {/* CARD DE BALANÇO DO DIA (PERDAS E GANHOS) - CLICÁVEL PARA EXPANDIR RELATÓRIO */}
+      {dailySummary && (
+        <div
+          onClick={() => setIsDailyReportOpen(true)}
+          className="p-4 sm:p-5 rounded-xl border border-neutral-800/90 bg-gradient-to-br from-neutral-900/95 via-neutral-950 to-neutral-900/70 hover:border-rose-500/60 hover:shadow-[0_0_30px_rgba(244,63,94,0.15)] cursor-pointer transition-all mb-5 group relative overflow-hidden"
+          title="Clique para ver o relatório completo de operações do dia"
+        >
+          {/* Brilho decorativo no hover */}
+          <div className="absolute top-0 right-0 w-64 h-64 bg-rose-500/5 rounded-full blur-3xl group-hover:bg-rose-500/10 transition-all pointer-events-none" />
+
+          <div className="flex justify-between items-center flex-wrap gap-3 mb-3 relative z-10">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-neutral-800/90 border border-neutral-700/60 flex items-center justify-center text-base shadow-inner group-hover:scale-105 transition-transform">
+                📊
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-extrabold font-mono uppercase tracking-wider text-white group-hover:text-rose-300 transition-colors">
+                    Balanço Diário Sniper
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full bg-neutral-800 text-[10px] font-mono text-neutral-300 border border-neutral-700">
+                    {dailySummary.date}
+                  </span>
+                </div>
+                <p className="text-[11px] text-neutral-400">
+                  Consolidado de ganhos e perdas das operações de hoje • Clique para expandir
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold text-rose-400 group-hover:text-rose-300 flex items-center gap-1.5 bg-rose-950/40 px-3 py-1.5 rounded-lg border border-rose-900/60 transition-all shadow-sm">
+                <span>Ver Relatório Completo</span>
+                <span className="group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform">↗</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 relative z-10">
+            {/* PnL Líquido BRL */}
+            <div className="p-3 rounded-lg bg-neutral-950/70 border border-neutral-800/80">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                Resultado em BRL
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className={`text-lg sm:text-xl font-extrabold font-mono ${
+                    dailySummary.net_pnl_brl > 0
+                      ? 'text-emerald-400'
+                      : dailySummary.net_pnl_brl < 0
+                      ? 'text-rose-400'
+                      : 'text-neutral-300'
+                  }`}
+                >
+                  {dailySummary.net_pnl_brl > 0 ? '+' : ''}
+                  {dailySummary.net_pnl_brl.toLocaleString('pt-BR', {
+                    style: 'currency',
+                    currency: 'BRL',
+                  })}
+                </span>
+              </div>
+              <span className="text-[10px] text-neutral-500 font-mono block mt-0.5 truncate">
+                Vol: {dailySummary.total_volume_brl.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+              </span>
+            </div>
+
+            {/* PnL Líquido USDT */}
+            <div className="p-3 rounded-lg bg-neutral-950/70 border border-neutral-800/80">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                Resultado em USDT
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className={`text-lg sm:text-xl font-extrabold font-mono ${
+                    dailySummary.net_pnl_usdt > 0
+                      ? 'text-emerald-400'
+                      : dailySummary.net_pnl_usdt < 0
+                      ? 'text-rose-400'
+                      : 'text-neutral-300'
+                  }`}
+                >
+                  {dailySummary.net_pnl_usdt > 0 ? '+' : ''}
+                  ${dailySummary.net_pnl_usdt.toFixed(2)} USDT
+                </span>
+              </div>
+              <span className="text-[10px] text-neutral-500 font-mono block mt-0.5 truncate">
+                Vol: ${dailySummary.total_volume_usdt.toFixed(2)}
+              </span>
+            </div>
+
+            {/* Taxa de Acerto (Win Rate) */}
+            <div className="p-3 rounded-lg bg-neutral-950/70 border border-neutral-800/80">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                Assertividade (Win Rate)
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className={`text-lg sm:text-xl font-extrabold font-mono ${
+                    dailySummary.win_rate_pct >= 50
+                      ? 'text-emerald-400'
+                      : dailySummary.win_rate_pct > 0
+                      ? 'text-amber-400'
+                      : 'text-neutral-400'
+                  }`}
+                >
+                  {dailySummary.win_rate_pct.toFixed(1)}%
+                </span>
+              </div>
+              {/* Barra de progresso visual */}
+              <div className="w-full bg-neutral-800 h-1.5 rounded-full overflow-hidden mt-1.5">
+                <div
+                  className={`h-full transition-all duration-500 ${
+                    dailySummary.win_rate_pct >= 50
+                      ? 'bg-emerald-500'
+                      : dailySummary.win_rate_pct > 0
+                      ? 'bg-amber-500'
+                      : 'bg-neutral-600'
+                  }`}
+                  style={{ width: `${Math.min(100, Math.max(0, dailySummary.win_rate_pct))}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Total de Operações */}
+            <div className="p-3 rounded-lg bg-neutral-950/70 border border-neutral-800/80">
+              <span className="text-[10px] text-neutral-400 uppercase font-bold block mb-0.5">
+                Operações do Dia
+              </span>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-lg sm:text-xl font-extrabold font-mono text-white">
+                  {dailySummary.total_trades}
+                </span>
+                <span className="text-[10px] text-neutral-400 font-mono">
+                  posições ({dailySummary.total_orders} ordens)
+                </span>
+              </div>
+              <div className="flex items-center gap-2 mt-1 text-[10px] font-mono">
+                <span className="text-emerald-400 font-bold">✓ {dailySummary.winning_trades}W</span>
+                <span className="text-neutral-500">•</span>
+                <span className="text-rose-400 font-bold">✕ {dailySummary.losing_trades}L</span>
+                {dailySummary.breakeven_trades > 0 && (
+                  <>
+                    <span className="text-neutral-500">•</span>
+                    <span className="text-amber-400">{dailySummary.breakeven_trades}E</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* CARD DE RESULTADO PÓS-TRADE (QUANTO GANHOU OU PERDEU) */}
       {lastOutcome && !isRunning && (
@@ -1002,6 +1214,249 @@ export default function SniperDaytradePanel() {
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE RELATÓRIO DETALHADO DO DIA */}
+      {isDailyReportOpen && dailySummary && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto"
+          onClick={() => setIsDailyReportOpen(false)}
+        >
+          <div
+            className="bg-neutral-950 border border-neutral-800 rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-[0_0_60px_rgba(0,0,0,0.9)] overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header do Modal */}
+            <div className="px-6 py-4 border-b border-neutral-800/80 flex items-center justify-between bg-neutral-900/70">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-lg shadow-inner">
+                  📑
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-extrabold text-white font-mono">
+                      Relatório Diário de Operações Sniper
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-full bg-neutral-800 text-xs font-mono text-neutral-300 border border-neutral-700">
+                      {dailySummary.date}
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-400">
+                    Histórico consolidado de todas as ordens e posições do Sniper Trading hoje
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDailyReportOpen(false)}
+                className="w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-800 flex items-center justify-center transition-colors text-base"
+                title="Fechar (Esc)"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* KPI Bar Resumo dentro do Modal */}
+            <div className="p-4 border-b border-neutral-800/60 bg-neutral-950/80 grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-2.5 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                <span className="text-[10px] text-neutral-400 uppercase font-bold block">P&L BRL</span>
+                <span className={`text-base font-extrabold font-mono ${dailySummary.net_pnl_brl > 0 ? 'text-emerald-400' : dailySummary.net_pnl_brl < 0 ? 'text-rose-400' : 'text-neutral-300'}`}>
+                  {dailySummary.net_pnl_brl > 0 ? '+' : ''}
+                  {dailySummary.net_pnl_brl.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </span>
+                <span className="text-[10px] text-neutral-500 font-mono block mt-0.5">
+                  Vol: {dailySummary.total_volume_brl.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                <span className="text-[10px] text-neutral-400 uppercase font-bold block">P&L USDT</span>
+                <span className={`text-base font-extrabold font-mono ${dailySummary.net_pnl_usdt > 0 ? 'text-emerald-400' : dailySummary.net_pnl_usdt < 0 ? 'text-rose-400' : 'text-neutral-300'}`}>
+                  {dailySummary.net_pnl_usdt > 0 ? '+' : ''}
+                  ${dailySummary.net_pnl_usdt.toFixed(2)} USDT
+                </span>
+                <span className="text-[10px] text-neutral-500 font-mono block mt-0.5">
+                  Vol: ${dailySummary.total_volume_usdt.toFixed(2)}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                <span className="text-[10px] text-neutral-400 uppercase font-bold block">Taxa de Acerto</span>
+                <span className={`text-base font-extrabold font-mono ${dailySummary.win_rate_pct >= 50 ? 'text-emerald-400' : dailySummary.win_rate_pct > 0 ? 'text-amber-400' : 'text-neutral-400'}`}>
+                  {dailySummary.win_rate_pct.toFixed(1)}%
+                </span>
+                <span className="text-[10px] text-neutral-500 font-mono block mt-0.5">
+                  {dailySummary.winning_trades} vitórias / {dailySummary.losing_trades} derrotas
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-neutral-900/80 border border-neutral-800">
+                <span className="text-[10px] text-neutral-400 uppercase font-bold block">Total de Ordens</span>
+                <span className="text-base font-extrabold font-mono text-white">
+                  {dailySummary.total_trades}
+                  <span className="text-xs font-normal text-neutral-400 ml-1">posições</span>
+                </span>
+                <span className="text-[10px] text-neutral-500 font-mono block mt-0.5">
+                  {dailySummary.total_orders} ordens executadas
+                </span>
+              </div>
+            </div>
+
+            {/* Barra de Filtros e Busca */}
+            <div className="px-6 py-3 border-b border-neutral-800/60 bg-neutral-900/40 flex justify-between items-center flex-wrap gap-3">
+              <div className="flex gap-1.5 bg-neutral-900 p-1 rounded-lg border border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setDailyReportFilter('all')}
+                  className={`px-3 py-1 text-xs font-mono font-bold rounded-md transition-all ${
+                    dailyReportFilter === 'all'
+                      ? 'bg-neutral-800 text-white shadow'
+                      : 'text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  Todas ({dailySummary.trades.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDailyReportFilter('profit')}
+                  className={`px-3 py-1 text-xs font-mono font-bold rounded-md transition-all ${
+                    dailyReportFilter === 'profit'
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow'
+                      : 'text-neutral-400 hover:text-emerald-400'
+                  }`}
+                >
+                  Lucros 🟢 ({dailySummary.winning_trades})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDailyReportFilter('loss')}
+                  className={`px-3 py-1 text-xs font-mono font-bold rounded-md transition-all ${
+                    dailyReportFilter === 'loss'
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30 shadow'
+                      : 'text-neutral-400 hover:text-rose-400'
+                  }`}
+                >
+                  Prejuízos / Stops 🔴 ({dailySummary.losing_trades})
+                </button>
+              </div>
+
+              {/* Input de Busca */}
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Buscar moeda (ex: XRP)..."
+                  value={dailyReportSearch}
+                  onChange={(e) => setDailyReportSearch(e.target.value)}
+                  className="px-3 py-1.5 bg-neutral-900 border border-neutral-800 text-xs font-mono text-white rounded-lg focus:outline-none focus:border-rose-500 w-48 sm:w-56 placeholder:text-neutral-600"
+                />
+                {dailyReportSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setDailyReportSearch('')}
+                    className="absolute right-2 top-1.5 text-xs text-neutral-400 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Lista com Rolagem das Operações */}
+            <div className="p-4 sm:p-6 overflow-y-auto flex-1 divide-y divide-neutral-800/50 space-y-2 max-h-[50vh] custom-scrollbar">
+              {filteredDailyTrades.length === 0 ? (
+                <div className="py-16 text-center text-neutral-500 font-mono text-xs">
+                  Nenhuma operação encontrada com os filtros aplicados.
+                </div>
+              ) : (
+                filteredDailyTrades.map((t, idx) => {
+                  const isBuy = t.action === 'BUY'
+                  const pnl = t.net_pnl_fiat ?? 0
+                  const isProfit = pnl > 0
+                  const isLoss = pnl < 0
+                  const timeFormatted = t.time || (t.timestamp ? new Date(t.timestamp).toLocaleTimeString('pt-BR') : '--:--')
+
+                  return (
+                    <div
+                      key={`${t.timestamp}_${idx}`}
+                      className="pt-3 pb-3 px-3.5 rounded-xl hover:bg-neutral-900/60 transition-colors flex justify-between items-center flex-wrap gap-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-[11px] font-mono text-neutral-500 w-16">
+                          {timeFormatted}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-mono font-extrabold border ${
+                            isBuy
+                              ? 'bg-cyan-950/40 text-cyan-300 border-cyan-800/50'
+                              : isProfit
+                              ? 'bg-emerald-950/40 text-emerald-300 border-emerald-800/50'
+                              : isLoss
+                              ? 'bg-rose-950/40 text-rose-300 border-rose-800/50'
+                              : 'bg-neutral-800 text-neutral-300 border-neutral-700'
+                          }`}
+                        >
+                          {isBuy ? 'COMPRA' : 'VENDA'}
+                        </span>
+                        <div>
+                          <span className="font-extrabold text-sm text-white font-mono">
+                            {t.symbol || t.pair}
+                          </span>
+                          <span className="text-xs text-neutral-400 font-mono ml-2">
+                            {isBuy
+                              ? `@ ${formatPrice(t.price, t.currency)}`
+                              : `${formatPrice(t.buy_price, t.currency)} ➔ ${formatPrice(t.sell_price || t.price, t.currency)}`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-4 text-right">
+                        <div>
+                          <span className="text-xs text-neutral-300 font-mono block">
+                            Vol: {formatPrice(t.amount, t.currency)}
+                          </span>
+                          <span className="text-[10px] text-neutral-500 font-mono block truncate max-w-[220px]" title={t.exit_reason || t.reason}>
+                            {t.exit_reason || t.reason || (isBuy ? 'Entrada Scanner' : 'Encerramento')}
+                          </span>
+                        </div>
+
+                        {!isBuy && (
+                          <div className="min-w-[95px] text-right">
+                            <span
+                              className={`text-sm font-extrabold font-mono block ${
+                                isProfit ? 'text-emerald-400' : isLoss ? 'text-rose-400' : 'text-neutral-300'
+                              }`}
+                            >
+                              {isProfit ? '+' : ''}
+                              {formatPrice(pnl, t.currency)}
+                            </span>
+                            <span
+                              className={`text-[10px] font-mono block ${
+                                (t.pnl_pct || 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                              }`}
+                            >
+                              ({(t.pnl_pct || 0) >= 0 ? '+' : ''}{(t.pnl_pct || 0).toFixed(2)}%)
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            {/* Footer do Modal */}
+            <div className="px-6 py-3.5 border-t border-neutral-800/80 bg-neutral-900/60 flex justify-between items-center">
+              <p className="text-[11px] text-neutral-500 hidden sm:block">
+                💡 <em>Todas as posições respeitam a Linha de Meta e Trailing Stop configurados para cobrir taxas da Binance.</em>
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsDailyReportOpen(false)}
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white font-mono text-xs font-bold rounded-lg transition-colors ml-auto shadow"
+              >
+                Fechar Relatório
+              </button>
+            </div>
           </div>
         </div>
       )}

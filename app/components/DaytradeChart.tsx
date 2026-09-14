@@ -15,6 +15,7 @@ import {
 interface Snapshot {
   timestamp?: string
   seconds_elapsed?: number
+  symbol?: string
   current_price?: number
   entry_price?: number
   in_position?: boolean
@@ -115,15 +116,20 @@ export default function DaytradeChart({
   const minPrice = allPrices.length > 0 ? Math.min(...allPrices) : 0
   const maxPrice = allPrices.length > 0 ? Math.max(...allPrices) : 0
   const padding = (maxPrice - minPrice) * 0.15 || minPrice * 0.001
-  const yDomain = [Math.floor(minPrice - padding), Math.ceil(maxPrice + padding)]
+  const yDomain = minPrice > 1
+    ? [Math.floor(minPrice - padding), Math.ceil(maxPrice + padding)]
+    : [Math.max(0, minPrice - padding), maxPrice + padding]
 
   const formatCurrency = (val: number) => {
     if (!val || isNaN(val)) return currency === 'USDT' ? '$ 0,00' : 'R$ 0,00'
+    const decimals = val < 0.001 ? 8 : val < 1 ? 4 : 2
     if (currency === 'USDT' || currency === 'USD') {
-      return `$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`
+      return `$ ${val.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: decimals })} USDT`
     }
-    return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    return val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: decimals })
   }
+
+  const activeSymbol = sortedSnapshots[sortedSnapshots.length - 1]?.symbol || 'ALT/USDT'
 
   return (
     <div className="space-y-3">
@@ -136,7 +142,7 @@ export default function DaytradeChart({
               style={{ backgroundColor: chartColor }}
             ></span>
             <span className="text-xs font-mono font-bold text-white">
-              Cotação Atual: {formatCurrency(latestPrice)}
+              {activeSymbol}: {formatCurrency(latestPrice)}
             </span>
           </div>
 

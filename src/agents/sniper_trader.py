@@ -3,41 +3,46 @@ import json
 import ccxt
 import pandas as pd
 import pandas_ta as ta
+from datetime import datetime, timezone
 from src.config import settings
 from src.db.vercel_kv import kv_db
 
 class SniperTraderAgent:
     """
-    Agente Especializado em Day Trade de Alta Frequência (Modo Sniper - 10 Minutos).
-    Executa micro-operações de scalping em velas de 1m, grava snapshots a cada 30s
-    e possui tolerância inteligente de até 2m para posições em loss.
+    Agente Especializado em Day Trade Multi-Ativo de Alta Frequência (Modo Sniper).
+    - Suporta qualquer ativo da carteira como funding source (ex: BTC, ETH, USDT, BRL).
+    - Escaneia em tempo real as moedas mais voláteis (NEAR, PEPE, SUI, DOGE, XRP, SOL, etc.).
+    - Distribui o capital proporcionalmente entre as top 1-3 oportunidades.
+    - Executa e acompanha cada ativo de forma individual e assíncrona com Trailing Stop e Anti-Loss.
     """
-    def __init__(self, capital: float = 10.0, currency: str = "USDT", symbol: str = None, dry_run: bool = False):
+    CANDIDATES_USDT = ['NEAR/USDT', 'PEPE/USDT', 'SUI/USDT', 'DOGE/USDT', 'XRP/USDT', 'SOL/USDT', 'WIF/USDT', 'FET/USDT', 'SHIB/USDT']
+    CANDIDATES_BRL = ['XRP/BRL', 'SOL/BRL', 'NEAR/BRL', 'DOGE/BRL', 'PEPE/BRL', 'BTC/BRL']
+
+    def __init__(self, capital: float = 10.0, currency: str = "USDT", source_asset: str = "USDT", symbol: str = None, dry_run: bool = False):
         self.capital = float(capital)
         self.currency = currency.upper()
+        self.source_asset = source_asset.upper() if source_asset else self.currency
+        self.symbol = symbol  # Se fornecido um par específico, opera ele; se None, ativa o scanner multi-ativo
         self.dry_run = dry_run
         self.exchange = ccxt.binance({
             'apiKey': settings.API_KEY,
             'secret': settings.SECRET_KEY,
             'enableRateLimit': True,
         })
-        if symbol:
-            self.symbol = symbol
-        else:
-            self.symbol = f"BTC/{self.currency}" if self.currency in ["USDT", "BRL"] else "BTC/USDT"
         self.session_duration_sec = 600   # 10 minutos
-        self.grace_period_sec = 120       # +2 minutos de tolerância se estiver em loss
-        self.snapshot_interval_sec = 30   # Snapshot a cada 30s
+        self.grace_period_sec = 120       # +2 minutos de tolerância anti-loss
+        self.snapshot_interval_sec = 30   # Snapshots a cada 30s
+        self.liquidity_rotation = None
 
     def fetch_1m_ta(self, symbol: str) -> dict:
         """Coleta as últimas velas de 1m e calcula indicadores rápidos (Bollinger, RSI-7, VWAP)."""
         try:
             bars = self.exchange.fetch_ohlcv(symbol, timeframe='1m', limit=35)
-            if len(bars) < 25:
+            if not bars or len(bars) < 20:
                 return {}
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            # RSI Rápido de 7 períodos para scalping
+            # RSI Rápido de 7 períodos
             df['rsi7'] = ta.rsi(df['close'], length=7)
             # Bandas de Bollinger (20, 2)
             bb = ta.bbands(df['close'], length=20, std=2)
@@ -49,289 +54,422 @@ class SniperTraderAgent:
                 df['bb_lower'] = df['close'] * 0.998
                 df['bb_upper'] = df['close'] * 1.008
 
-            # VWAP Simplificado
+            # VWAP Intradiário
             df['typical'] = (df['high'] + df['low'] + df['close']) / 3
-            df['vwap'] = (df['typical'] * df['volume']).cumsum() / df['volume'].cumsum()
+            vol_sum = df['volume'].cumsum()
+            df['vwap'] = (df['typical'] * df['volume']).cumsum() / (vol_sum.replace(0, np.nan) if 'np' in globals() else vol_sum)
+
+            # Volatilidade de 10 min
+            df['rolling_max'] = df['high'].rolling(10).max()
+            df['rolling_min'] = df['low'].rolling(10).min()
+            df['range_10m_pct'] = ((df['rolling_max'] - df['rolling_min']) / df['rolling_min'].replace(0, 1)) * 100
 
             latest = df.iloc[-1]
             return {
+                "symbol": symbol,
                 "close": float(latest['close']),
                 "rsi7": float(latest['rsi7']) if not pd.isna(latest['rsi7']) else 50.0,
                 "bb_lower": float(latest['bb_lower']) if 'bb_lower' in latest else float(latest['close'] * 0.998),
                 "bb_upper": float(latest['bb_upper']) if 'bb_upper' in latest else float(latest['close'] * 1.008),
-                "vwap": float(latest['vwap']) if not pd.isna(latest['vwap']) else float(latest['close'])
+                "vwap": float(latest['vwap']) if not pd.isna(latest['vwap']) else float(latest['close']),
+                "range_10m_pct": float(latest['range_10m_pct']) if not pd.isna(latest['range_10m_pct']) else 0.5
             }
         except Exception as e:
-            print(f"[Sniper] Erro ao obter dados de 1m para {symbol}: {e}")
             return {}
 
+    def scan_opportunities(self) -> list:
+        """Escaneia a cesta de altcoins candidatas e ranqueia as melhores oportunidades de scalping."""
+        candidates = self.CANDIDATES_USDT if self.currency == 'USDT' else self.CANDIDATES_BRL
+        if self.symbol and self.symbol in candidates:
+            candidates = [self.symbol]
+
+        scored = []
+        print(f"[Sniper Scanner] Varrendo {len(candidates)} pares em busca de volatilidade e oportunidades...")
+        for sym in candidates:
+            ta_data = self.fetch_1m_ta(sym)
+            if not ta_data or ta_data.get('close', 0) <= 0:
+                continue
+
+            price = ta_data['close']
+            rsi = ta_data['rsi7']
+            range_10m = ta_data['range_10m_pct']
+            vwap = ta_data['vwap']
+            bb_lower = ta_data['bb_lower']
+
+            # Score de Oportunidade:
+            # - Maior volatilidade nos 10m ganha mais pontos
+            # - RSI sobrevenda (< 35) ou rompimento de momentum (> 50 e < 65) ganha bônus
+            score = range_10m * 10.0
+            setup = "Neutro"
+            if rsi < 32 and price <= bb_lower * 1.002:
+                score += 35.0
+                setup = "Sobrevenda Bollinger"
+            elif 51 <= rsi <= 64 and price >= vwap * 1.0005:
+                score += 30.0
+                setup = "Rompimento VWAP"
+            elif range_10m >= 0.8:
+                score += 20.0
+                setup = "Alta Volatilidade"
+
+            scored.append({
+                "symbol": sym,
+                "price": price,
+                "rsi7": round(rsi, 1),
+                "range_10m_pct": round(range_10m, 2),
+                "score": round(score, 1),
+                "setup": setup,
+                "ta": ta_data
+            })
+
+        scored.sort(key=lambda x: x['score'], reverse=True)
+        print(f"[Sniper Scanner] Top Oportunidades Encontradas:")
+        for s in scored[:4]:
+            print(f"  • {s['symbol']}: Range 10m {s['range_10m_pct']}% | RSI {s['rsi7']} | Setup: {s['setup']} (Score: {s['score']})")
+
+        return scored
+
+    def allocate_capital(self, scored_candidates: list) -> list:
+        """Distribui o capital entre os Top 1 a 3 ativos respeitando os limites da Binance."""
+        if not scored_candidates:
+            return []
+
+        # Determina o lote mínimo de cada moeda
+        # PEPE, DOGE, SHIB, WIF = $1.00 USDT
+        # Demais pares USDT = $5.00 USDT
+        # Pares BRL = R$ 10.00
+        min_costs = {
+            'PEPE/USDT': 1.0, 'DOGE/USDT': 1.0, 'SHIB/USDT': 1.0, 'WIF/USDT': 1.0, 'FLOKI/USDT': 1.0
+        }
+        default_min = 5.0 if self.currency == 'USDT' else 10.0
+
+        allocations = []
+        rem_capital = self.capital
+
+        for cand in scored_candidates:
+            sym = cand['symbol']
+            sym_min = min_costs.get(sym, default_min)
+            if rem_capital < sym_min:
+                continue
+
+            # Se temos capital para múltiplos ativos
+            if rem_capital >= (sym_min * 2) and len(allocations) < 2:
+                alloc = round(rem_capital / 2, 2)
+            elif rem_capital >= (sym_min * 3) and len(allocations) < 3:
+                alloc = round(rem_capital / 3, 2)
+            else:
+                alloc = round(rem_capital, 2)
+
+            allocations.append({
+                "symbol": sym,
+                "allocated_capital": alloc,
+                "min_cost": sym_min,
+                "setup": cand['setup'],
+                "price": cand['price'],
+                "ta": cand['ta']
+            })
+            rem_capital -= alloc
+            if len(allocations) >= 3 or rem_capital < default_min:
+                break
+
+        # Se sobrou capital não alocado, adiciona ao primeiro colocado
+        if rem_capital > 0 and allocations:
+            allocations[0]['allocated_capital'] = round(allocations[0]['allocated_capital'] + rem_capital, 2)
+
+        return allocations
+
+    def execute_flash_liquidity(self):
+        """Se o ativo de origem for uma cripto (ex: BTC), converte fração para USDT/BRL para operar."""
+        if self.source_asset in ['USDT', 'BRL']:
+            return
+
+        print(f"[Sniper Liquidez Flash] Convertendo {self.capital} de {self.source_asset} para {self.currency} para operar...")
+        pair = f"{self.source_asset}/{self.currency}"
+        try:
+            ticker = self.exchange.fetch_ticker(pair)
+            price = ticker['last']
+            qty = self.capital / price
+            try:
+                prec_qty = float(self.exchange.amount_to_precision(pair, qty))
+            except:
+                prec_qty = round(qty, 6)
+
+            if not self.dry_run:
+                try:
+                    self.exchange.create_market_sell_order(pair, prec_qty)
+                    print(f"[Sniper Liquidez Flash] Venda executada: {prec_qty} {pair} @ {price}")
+                except Exception as e:
+                    print(f"[Sniper Liquidez Flash] Aviso ordem spot: {e}")
+
+            self.liquidity_rotation = {
+                "source_asset": self.source_asset,
+                "pair": pair,
+                "initial_price": price,
+                "crypto_qty": prec_qty,
+                "capital_generated": self.capital
+            }
+        except Exception as e:
+            print(f"[Sniper Liquidez Flash] Erro ao obter cotação de {pair}: {e}")
+
+    def revert_flash_liquidity(self, final_capital: float):
+        """Ao final da sessão, recompra o ativo de origem com o capital total + lucros."""
+        if not self.liquidity_rotation or self.source_asset in ['USDT', 'BRL']:
+            return
+
+        pair = self.liquidity_rotation['pair']
+        print(f"[Sniper Recomposição] Recomprando {self.source_asset} com o capital final de ${final_capital:.2f} {self.currency}...")
+        try:
+            ticker = self.exchange.fetch_ticker(pair)
+            price = ticker['last']
+            qty = final_capital / price
+            try:
+                prec_qty = float(self.exchange.amount_to_precision(pair, qty))
+            except:
+                prec_qty = round(qty, 6)
+
+            if not self.dry_run:
+                try:
+                    self.exchange.create_market_buy_order(pair, None, params={'quoteOrderQty': final_capital})
+                    print(f"[Sniper Recomposição] Recompra concluída: {prec_qty} {pair} por ${final_capital:.2f}")
+                except Exception as e:
+                    print(f"[Sniper Recomposição] Falha na recompra: {e}")
+        except Exception as e:
+            print(f"[Sniper Recomposição] Erro: {e}")
+
     def run_session(self, duration_minutes: int = 10) -> dict:
-        """Executa a sessão completa de 10 minutos (+ até 2m se em loss)."""
+        """Executa a sessão completa multi-ativo de 10 minutos de forma assíncrona com gestão individual."""
         self.session_duration_sec = duration_minutes * 60
         session_info = kv_db.get_daytrade_session() or {}
         started_at = time.time()
-        from datetime import datetime, timezone
-        session_info["started_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        iso_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        session_info["started_at"] = iso_now
         session_info["status"] = "running"
+        session_info["source_asset"] = self.source_asset
         session_info["in_grace_period"] = False
+        session_info["positions"] = {}
         kv_db.start_daytrade_session(session_info)
 
         print(f"\n========================================================")
-        print(f"  [SNIPER DAY TRADE] Sessão Iniciada! Capital: {self.capital:.2f} {self.currency}")
-        print(f"  Duração Base: 10 min (600s) | Tolerância Loss: +2 min (120s)")
-        print(f"  Par Alvo: {self.symbol} | Modo: {'SIMULAÇÃO' if self.dry_run else 'MERCADO REAL'}")
+        print(f"  [SNIPER DAY TRADE MULTI-ATIVO] Sessão Iniciada!")
+        print(f"  Origem de Capital: {self.source_asset} | Capital Total: {self.capital:.2f} {self.currency}")
+        print(f"  Duração Base: 10 min | Tolerância Anti-Loss: +2 min")
+        print(f"  Modo: {'SIMULAÇÃO (DRY RUN)' if self.dry_run else 'MERCADO REAL'}")
         print(f"========================================================\n")
 
-        active_position = None
+        # 1. Conversão Flash de Liquidez se originar de crypto (ex: BTC)
+        self.execute_flash_liquidity()
+
+        # 2. Scanner de Oportunidades
+        scored = self.scan_opportunities()
+        allocated_targets = self.allocate_capital(scored)
+
+        print(f"\n[Sniper Alocação] Capital distribuído entre {len(allocated_targets)} ativos:")
+        for t in allocated_targets:
+            print(f"  ➔ {t['symbol']}: {t['allocated_capital']:.2f} {self.currency} (Lote Mín: ${t['min_cost']})")
+
+        active_positions = {}  # { symbol: position_data }
         trades_history = []
         last_snapshot_time = 0.0
         session_capital = self.capital
         in_grace_period = False
 
+        # 3. Disparo das Compras Iniciais para cada ativo selecionado
+        for t in allocated_targets:
+            sym = t['symbol']
+            trade_cost = t['allocated_capital']
+            cur_price = t['price']
+            raw_qty = trade_cost / cur_price
+            try:
+                crypto_qty = float(self.exchange.amount_to_precision(sym, raw_qty))
+            except:
+                crypto_qty = raw_qty
+
+            print(f"[Sniper Disparo] 🚀 Comprando {sym} | {crypto_qty} moedas por ${trade_cost:.2f}")
+            if not self.dry_run:
+                try:
+                    self.exchange.create_market_buy_order(sym, crypto_qty)
+                except Exception as e:
+                    try:
+                        self.exchange.create_market_buy_order(sym, None, params={'quoteOrderQty': trade_cost})
+                    except Exception as e2:
+                        print(f"[Sniper Disparo] Aviso Binance em {sym}: {e2}")
+
+            buy_record = {
+                "action": "BUY",
+                "type": "BUY",
+                "symbol": sym,
+                "pair": sym,
+                "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "time": time.strftime("%H:%M:%S"),
+                "price": cur_price,
+                "qty": crypto_qty,
+                "amount": trade_cost,
+                "currency": self.currency,
+                "reason": f"Scanner Sniper ({t['setup']})",
+                "pnl_pct": 0.0
+            }
+            kv_db.record_daytrade_microtrade(buy_record)
+
+            active_positions[sym] = {
+                "symbol": sym,
+                "entry_price": cur_price,
+                "current_price": cur_price,
+                "highest_price": cur_price,
+                "crypto_qty": crypto_qty,
+                "entry_cost": trade_cost,
+                "buy_timestamp": time.time(),
+                "buy_time": time.strftime("%H:%M:%S"),
+                "pnl_pct": 0.0,
+                "in_position": True
+            }
+
+        # 4. Loop de Gestão Concorrente / Assíncrona Tick-a-Tick (3s)
         while True:
             now = time.time()
             elapsed_sec = int(now - started_at)
-            time_left_sec = max(0, self.session_duration_sec - elapsed_sec)
 
-            # 1. Verifica se entrou no período de tolerância (+2 minutos se em loss)
-            if elapsed_sec >= self.session_duration_sec and active_position:
-                unrealized_pct = ((active_position['current_price'] - active_position['entry_price']) / active_position['entry_price']) * 100
-                if unrealized_pct < 0:
-                    if not in_grace_period:
-                        in_grace_period = True
-                        session_info["in_grace_period"] = True
-                        kv_db.update_daytrade_session(session_info)
-                        print(f"[Sniper] ⏳ [10m ATINGIDO COM LOSS: {unrealized_pct:+.2f}%] Ativando Tolerância de Recuperação (até +2 min)...")
+            # A. Verifica se atingiu a marca de 10 minutos (600s) com alguma posição em loss
+            if elapsed_sec >= self.session_duration_sec and active_positions:
+                any_in_loss = any(pos['pnl_pct'] < 0 for pos in active_positions.values())
+                if any_in_loss and not in_grace_period:
+                    in_grace_period = True
+                    session_info["in_grace_period"] = True
+                    kv_db.update_daytrade_session(session_info)
+                    print(f"[Sniper] ⏳ [10m ATINGIDO] Pelo menos uma posição em loss. Ativando Tolerância Anti-Loss (+2 min)...")
 
-            # 2. Captura Snapshot a cada 30 segundos
+            # B. Monitoramento e Saída Individual de Cada Posição
+            symbols_to_close = []
+            for sym, pos in list(active_positions.items()):
+                try:
+                    ticker = self.exchange.fetch_ticker(sym)
+                    cur_p = float(ticker['last'])
+                except:
+                    cur_p = pos['current_price']
+
+                pos['current_price'] = cur_p
+                entry_p = pos['entry_price']
+                pnl_pct = ((cur_p - entry_p) / entry_p) * 100
+                pos['pnl_pct'] = round(pnl_pct, 2)
+
+                if cur_p > pos['highest_price']:
+                    pos['highest_price'] = cur_p
+
+                # Trailing Stop individual (+0.50%)
+                hit_trailing = (pos['highest_price'] >= entry_p * 1.005) and (cur_p <= entry_p * 1.001)
+
+                should_exit = False
+                exit_reason = ""
+
+                if pnl_pct >= 0.70:
+                    should_exit = True
+                    exit_reason = "🎯 Take Profit (+0.70%)"
+                elif hit_trailing:
+                    should_exit = True
+                    exit_reason = "🛡️ Trailing Stop (Lucro Protegido)"
+                elif pnl_pct <= -0.45 and not in_grace_period:
+                    should_exit = True
+                    exit_reason = "🛑 Stop Loss Curto (-0.45%)"
+                elif in_grace_period and pnl_pct >= 0.0:
+                    should_exit = True
+                    exit_reason = "✅ Recuperação no Período de Tolerância (Breakeven)"
+                elif elapsed_sec >= (self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)):
+                    should_exit = True
+                    exit_reason = "⏰ Tempo Limite Esgotado (Hard Stop)"
+
+                if should_exit:
+                    symbols_to_close.append((sym, cur_p, pnl_pct, exit_reason))
+
+            # Executa fechamento individual
+            for sym, cur_p, pnl_pct, exit_reason in symbols_to_close:
+                pos = active_positions[sym]
+                sell_qty = pos['crypto_qty']
+                print(f"[Sniper Saída] 🏁 Fechando {sym}: {exit_reason} @ {cur_p} ({pnl_pct:+.2f}%)")
+
+                if not self.dry_run:
+                    try:
+                        prec_qty = float(self.exchange.amount_to_precision(sym, sell_qty))
+                        self.exchange.create_market_sell_order(sym, prec_qty)
+                    except Exception as e:
+                        print(f"[Sniper Saída] Falha na ordem Binance para {sym}: {e}")
+
+                gross_pnl = (sell_qty * cur_p) - pos['entry_cost']
+                fee = (pos['entry_cost'] + (sell_qty * cur_p)) * 0.001
+                net_pnl = gross_pnl - fee
+                session_capital += net_pnl
+
+                sell_record = {
+                    "action": "SELL",
+                    "type": "SELL",
+                    "symbol": sym,
+                    "pair": sym,
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "time": time.strftime("%H:%M:%S"),
+                    "price": cur_p,
+                    "buy_price": pos['entry_price'],
+                    "sell_price": cur_p,
+                    "qty": sell_qty,
+                    "crypto_qty": sell_qty,
+                    "amount": round(sell_qty * cur_p, 2),
+                    "pnl_pct": round(pnl_pct, 2),
+                    "net_pnl_fiat": round(net_pnl, 2),
+                    "currency": self.currency,
+                    "exit_reason": exit_reason,
+                    "reason": exit_reason
+                }
+                trades_history.append(sell_record)
+                kv_db.record_daytrade_microtrade(sell_record)
+                del active_positions[sym]
+
+            # C. Atualiza o estado da sessão no Redis para o Frontend a cada tick
+            total_net_pnl = sum(t.get("net_pnl_fiat", 0) for t in trades_history)
+            unrealized_total = sum((pos['current_price'] * pos['crypto_qty']) - pos['entry_cost'] for pos in active_positions.values())
+            overall_pnl_pct = round(((total_net_pnl + unrealized_total) / self.capital) * 100, 2) if self.capital > 0 else 0.0
+
+            session_info["in_position"] = len(active_positions) > 0
+            session_info["positions"] = active_positions
+            session_info["position_pnl_pct"] = overall_pnl_pct
+            session_info["trades_count"] = len(trades_history)
+            session_info["total_pnl_pct"] = overall_pnl_pct
+            session_info["in_grace_period"] = in_grace_period
+            kv_db.update_daytrade_session(session_info)
+
+            # D. Snapshot consolidado e por ativo a cada 30 segundos
             if (now - last_snapshot_time) >= self.snapshot_interval_sec:
                 last_snapshot_time = now
-                ta_data = self.fetch_1m_ta(self.symbol)
-                cur_p = ta_data.get("close", active_position['current_price'] if active_position else 0.0)
-                
-                status_desc = "AGUARDANDO OPORTUNIDADE"
-                unrealized_fiat = 0.0
-                unrealized_pct = 0.0
-
-                if active_position and cur_p > 0:
-                    active_position['current_price'] = cur_p
-                    unrealized_pct = ((cur_p - active_position['entry_price']) / active_position['entry_price']) * 100
-                    unrealized_fiat = (active_position['crypto_qty'] * cur_p) - active_position['entry_cost']
-                    status_desc = f"COMPRADO ({unrealized_pct:+.2f}%)"
+                # Ativo prioritário para o gráfico
+                primary_pos = list(active_positions.values())[0] if active_positions else None
+                primary_sym = primary_pos['symbol'] if primary_pos else (allocated_targets[0]['symbol'] if allocated_targets else 'MULTI')
+                primary_price = primary_pos['current_price'] if primary_pos else (scored[0]['price'] if scored else 0.0)
 
                 snapshot = {
                     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "seconds_elapsed": elapsed_sec,
                     "elapsed_sec": elapsed_sec,
                     "elapsed_str": f"{elapsed_sec // 60:02d}:{elapsed_sec % 60:02d}",
-                    "symbol": self.symbol,
-                    "pair": self.symbol,
-                    "in_position": active_position is not None,
-                    "status": status_desc,
-                    "state": status_desc,
-                    "in_grace_period": in_grace_period,
-                    "current_price": cur_p,
-                    "entry_price": active_position['entry_price'] if active_position else None,
-                    "unrealized_pnl_pct": round(unrealized_pct, 2),
-                    "unrealized_pct": round(unrealized_pct, 2),
-                    "unrealized_fiat": round(unrealized_fiat, 2),
-                    "rsi": round(ta_data.get("rsi7", 50.0), 1),
-                    "rsi7": round(ta_data.get("rsi7", 50.0), 1),
-                    "vwap": round(ta_data.get("vwap", 0.0), 2)
+                    "symbol": primary_sym,
+                    "pair": primary_sym,
+                    "in_position": len(active_positions) > 0,
+                    "current_price": primary_price,
+                    "entry_price": primary_pos['entry_price'] if primary_pos else None,
+                    "unrealized_pnl_pct": overall_pnl_pct,
+                    "unrealized_pct": overall_pnl_pct,
+                    "active_coins_count": len(active_positions),
+                    "positions_summary": {k: v['pnl_pct'] for k, v in active_positions.items()},
+                    "in_grace_period": in_grace_period
                 }
                 kv_db.save_daytrade_snapshot(snapshot)
-                print(f"[Sniper Snapshot {snapshot['elapsed_str']}] {self.symbol} @ {cur_p:.2f} | {status_desc} | RSI: {snapshot['rsi7']:.1f}")
+                print(f"[Sniper Snapshot {snapshot['elapsed_str']}] Posições Abertas: {len(active_positions)} | PnL Geral: {overall_pnl_pct:+.2f}%")
 
-            # 3. Gerenciamento de Posição Ativa (Monitora Saída)
-            if active_position:
-                ticker = self.exchange.fetch_ticker(self.symbol)
-                cur_price = ticker['last']
-                active_position['current_price'] = cur_price
-                entry_price = active_position['entry_price']
-                pnl_pct = ((cur_price - entry_price) / entry_price) * 100
-
-                # Atualiza máxima para Trailing Stop
-                if cur_price > active_position['highest_price']:
-                    active_position['highest_price'] = cur_price
-
-                # Sincroniza em tempo real com o Frontend
-                session_info["in_position"] = True
-                session_info["current_price"] = cur_price
-                session_info["entry_price"] = entry_price
-                session_info["position_qty"] = active_position['crypto_qty']
-                session_info["position_pnl_pct"] = round(pnl_pct, 2)
-                session_info["trades_count"] = len(trades_history)
-                kv_db.update_daytrade_session(session_info)
-
-                # Trailing Stop: se bateu +0.5%, não aceita sair abaixo do breakeven
-                gain_from_top = ((cur_price - active_position['highest_price']) / active_position['highest_price']) * 100
-                hit_trailing = (active_position['highest_price'] >= entry_price * 1.005) and (cur_price <= entry_price * 1.001)
-
-                should_exit = False
-                exit_reason = ""
-
-                # Condição A: Take Profit Atingido (+0.6% a +0.9%)
-                if pnl_pct >= 0.70:
-                    should_exit = True
-                    exit_reason = "🎯 Take Profit (+0.70%)"
-
-                # Condição B: Trailing Stop disparado
-                elif hit_trailing:
-                    should_exit = True
-                    exit_reason = "🛡️ Trailing Stop (Proteção de Lucro)"
-
-                # Condição C: Stop Loss Estrito (-0.45%)
-                elif pnl_pct <= -0.45 and not in_grace_period:
-                    should_exit = True
-                    exit_reason = "🛑 Stop Loss Curto (-0.45%)"
-
-                # Condição D: Período de Tolerância ativo e reverteu para Breakeven/Lucro
-                elif in_grace_period and pnl_pct >= 0.0:
-                    should_exit = True
-                    exit_reason = "✅ Recuperação no Período de Tolerância (Breakeven/Lucro)"
-
-                # Condição E: Tempo Total Esgotado (10m sem loss ou 12m com loss)
-                max_allowed_time = self.session_duration_sec + self.grace_period_sec if in_grace_period else self.session_duration_sec
-                if elapsed_sec >= max_allowed_time:
-                    should_exit = True
-                    exit_reason = "⏰ Tempo Limite Esgotado (Hard Close)"
-
-                if should_exit:
-                    sell_amount = active_position['crypto_qty']
-                    print(f"[Sniper] Fechando posição: {exit_reason} @ {cur_price:.2f} ({pnl_pct:+.2f}%)")
-                    
-                    if not self.dry_run:
-                        try:
-                            prec_qty = float(self.exchange.amount_to_precision(self.symbol, sell_amount))
-                            self.exchange.create_market_sell_order(self.symbol, prec_qty)
-                        except Exception as e:
-                            print(f"[Sniper] Erro ao executar venda na corretora: {e}")
-
-                    gross_pnl = (sell_amount * cur_price) - active_position['entry_cost']
-                    fee = (active_position['entry_cost'] + (sell_amount * cur_price)) * 0.001
-                    net_pnl = gross_pnl - fee
-                    session_capital += net_pnl
-
-                    sell_record = {
-                        "action": "SELL",
-                        "type": "SELL",
-                        "pair": self.symbol,
-                        "symbol": self.symbol,
-                        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "buy_time": active_position['buy_time'],
-                        "sell_time": time.strftime("%H:%M:%S"),
-                        "duration_sec": int(now - active_position['buy_timestamp']),
-                        "price": cur_price,
-                        "buy_price": entry_price,
-                        "sell_price": cur_price,
-                        "qty": sell_amount,
-                        "crypto_qty": sell_amount,
-                        "amount": round(sell_amount * cur_price, 2),
-                        "pnl_pct": round(pnl_pct, 2),
-                        "net_pnl_fiat": round(net_pnl, 2),
-                        "currency": self.currency,
-                        "exit_reason": exit_reason,
-                        "reason": exit_reason
-                    }
-                    trades_history.append(sell_record)
-                    kv_db.record_daytrade_microtrade(sell_record)
-                    active_position = None
-
-                    session_info["in_position"] = False
-                    session_info["position_pnl_pct"] = 0.0
-                    session_info["trades_count"] = len(trades_history)
-                    total_pnl_acc = round(sum(t.get("net_pnl_fiat", 0) for t in trades_history), 2)
-                    session_info["total_pnl_pct"] = round((total_pnl_acc / self.capital) * 100, 2) if self.capital > 0 else 0.0
-                    kv_db.update_daytrade_session(session_info)
-
-            # 4. Busca Sinal de Entrada (se não tiver posição e ainda tiver tempo hábil)
-            elif elapsed_sec < (self.session_duration_sec - 60):  # Não abre trade nos últimos 60s
-                ta_data = self.fetch_1m_ta(self.symbol)
-                cur_price = ta_data.get("close", 0.0)
-                rsi = ta_data.get("rsi7", 50.0)
-                bb_lower = ta_data.get("bb_lower", 0.0)
-                vwap = ta_data.get("vwap", 0.0)
-
-                # Gatilho Quantitativo de Scalping:
-                # 1. RSI-7 em sobrevenda extrema (< 28) E preço próximo ou abaixo da Banda Inferior de Bollinger
-                # 2. OU Rompimento de alta da VWAP com RSI em expansão (> 52 e < 65)
-                buy_signal = False
-                trigger_name = ""
-
-                if cur_price > 0 and rsi < 28 and cur_price <= bb_lower * 1.001:
-                    buy_signal = True
-                    trigger_name = f"RSI Sobrevendido ({rsi:.1f}) + Bollinger Low ({bb_lower:.2f})"
-                elif cur_price > 0 and 52 <= rsi <= 65 and cur_price > vwap * 1.0005:
-                    buy_signal = True
-                    trigger_name = f"Rompimento de VWAP ({vwap:.2f}) + Micro-Momentum"
-
-                if buy_signal and session_capital >= 5.0:
-                    trade_cost = round(min(session_capital, self.capital), 2)
-                    raw_qty = trade_cost / cur_price
-                    try:
-                        crypto_qty = float(self.exchange.amount_to_precision(self.symbol, raw_qty))
-                    except:
-                        crypto_qty = raw_qty
-
-                    print(f"[Sniper] 🚀 SINAL DE COMPRA: {trigger_name} | {crypto_qty} {self.symbol} por ${trade_cost:.2f}")
-                    
-                    order_success = False
-                    if not self.dry_run:
-                        try:
-                            self.exchange.create_market_buy_order(self.symbol, crypto_qty)
-                            order_success = True
-                        except Exception as e:
-                            print(f"[Sniper] Falha na ordem de compra: {e}")
-                            try:
-                                self.exchange.create_market_buy_order(self.symbol, None, params={'quoteOrderQty': trade_cost})
-                                order_success = True
-                            except Exception as e2:
-                                print(f"[Sniper] Falha também com quoteOrderQty (saldo insuficiente na Binance): {e2}")
-                    else:
-                        order_success = True
-
-                    active_position = {
-                        "symbol": self.symbol,
-                        "entry_price": cur_price,
-                        "current_price": cur_price,
-                        "highest_price": cur_price,
-                        "crypto_qty": crypto_qty,
-                        "entry_cost": trade_cost,
-                        "buy_timestamp": now,
-                        "buy_time": time.strftime("%H:%M:%S")
-                    }
-
-                    buy_record = {
-                        "action": "BUY",
-                        "type": "BUY",
-                        "pair": self.symbol,
-                        "symbol": self.symbol,
-                        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "time": time.strftime("%H:%M:%S"),
-                        "price": cur_price,
-                        "qty": crypto_qty,
-                        "amount": trade_cost,
-                        "currency": self.currency,
-                        "reason": trigger_name,
-                        "pnl_pct": 0.0
-                    }
-                    kv_db.record_daytrade_microtrade(buy_record)
-
-                    session_info["in_position"] = True
-                    session_info["current_price"] = cur_price
-                    session_info["entry_price"] = cur_price
-                    session_info["position_qty"] = crypto_qty
-                    session_info["position_pnl_pct"] = 0.0
-                    session_info["trades_count"] = len(trades_history) + 1
-                    kv_db.update_daytrade_session(session_info)
-
-            # 5. Condição de Término da Sessão
-            max_total_time = self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)
-            if elapsed_sec >= max_total_time and active_position is None:
-                print(f"[Sniper] 🏁 Tempo total da sessão finalizado com sucesso ({elapsed_sec}s).")
+            # E. Término da Sessão
+            max_allowed_time = self.session_duration_sec + (self.grace_period_sec if in_grace_period else 0)
+            if elapsed_sec >= max_allowed_time and len(active_positions) == 0:
+                print(f"[Sniper] 🏁 Todas as posições concluídas e tempo esgotado ({elapsed_sec}s).")
                 break
 
-            time.sleep(3)  # Loop de alta frequência a cada 3 segundos
+            time.sleep(3)
+
+        # 5. Recomposição de Ativo de Origem (se aplicável)
+        self.revert_flash_liquidity(session_capital)
 
         # 6. Consolidação e Encerramento
         total_trades = len(trades_history)
@@ -342,6 +480,7 @@ class SniperTraderAgent:
         actual_duration_min = round((time.time() - started_at) / 60, 1)
 
         summary = {
+            "source_asset": self.source_asset,
             "initial_capital": self.capital,
             "final_capital": round(session_capital, 2),
             "currency": self.currency,

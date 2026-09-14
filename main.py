@@ -176,9 +176,10 @@ def main():
         print("=======================================================")
         from src.agents.sniper_trader import SniperTraderAgent
         sniper = SniperTraderAgent(
-            capital=float(daytrade_session.get("capital", 50.0)),
-            currency=daytrade_session.get("currency", "BRL"),
-            symbol=daytrade_session.get("symbol", "BTC/BRL"),
+            capital=float(daytrade_session.get("capital", 10.0)),
+            currency=daytrade_session.get("currency", "USDT"),
+            source_asset=daytrade_session.get("source_asset", "USDT"),
+            symbol=daytrade_session.get("symbol"),
             dry_run=dry_run
         )
         try:

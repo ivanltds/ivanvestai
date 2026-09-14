@@ -20,11 +20,19 @@ interface SniperChatFeedProps {
 
 export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedProps) {
   const [filter, setFilter] = useState<'all' | 'decisions' | 'holds'>('all')
-  const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const prevCountRef = useRef<number>(0)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Rola ESTRITAMENTE o container interno do chat sem jamais afetar o scroll da janela/página
+    if (containerRef.current && messages.length > prevCountRef.current) {
+      const el = containerRef.current
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+      if (isNearBottom || prevCountRef.current === 0) {
+        el.scrollTop = el.scrollHeight
+      }
+    }
+    prevCountRef.current = messages.length
   }, [messages])
 
   const filteredMessages = messages.filter((m) => {
@@ -178,7 +186,6 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
             )
           })
         )}
-        <div ref={bottomRef} />
       </div>
 
       {/* Rodapé: Indicador de Atividade ao Vivo */}

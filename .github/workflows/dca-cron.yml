@@ -2,12 +2,12 @@ name: IvanvestAI DCA Cron
 
 on:
   schedule:
-    # Executa todos os dias ao meio-dia (UTC), o que é 09:00 no horário de Brasília
-    - cron: '0 12 * * *'
+    # Executa a cada hora cheia
+    - cron: '0 * * * *'
   workflow_dispatch: # Permite rodar o robô manualmente clicando em um botão
 
 jobs:
-  run-dca-bot:
+  run-ai-hedge-fund:
     runs-on: ubuntu-latest
 
     steps:
@@ -30,6 +30,7 @@ jobs:
           EXCHANGE_ID: ${{ secrets.EXCHANGE_ID }}
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           DCA_SYMBOL: ${{ vars.DCA_SYMBOL }}
           DCA_AMOUNT_FIAT: ${{ vars.DCA_AMOUNT_FIAT }}
           DCA_CURRENCY: ${{ vars.DCA_CURRENCY }}

@@ -46,6 +46,9 @@ export default async function DashboardPage() {
   // Para arrays vindos do Upstash
   const auditLogs = (auditLogsRaw || []).map((log: any) => safeParse(log, {}))
   const currentPnl = pnlHistoryRaw && pnlHistoryRaw.length > 0 ? safeParse(pnlHistoryRaw[0], {}).value || 0 : 0
+  const totalAllocated = Object.values(openPositions).length > 0
+    ? Object.values(openPositions).reduce((acc: number, pos: any) => acc + (pos.total_invested || 0), 0)
+    : currentPnl
 
   // Formatações
   const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val)
@@ -100,8 +103,9 @@ export default async function DashboardPage() {
           )}
           <div className="text-right">
             <p className="text-sm text-neutral-500 mb-1">Total Alocado (Histórico)</p>
-            <p className="text-3xl font-bold text-white">{formatCurrency(currentPnl)}</p>
+            <p className="text-3xl font-bold text-white">{formatCurrency(totalAllocated)}</p>
           </div>
+
           <Link href="/settings" className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold text-white transition-colors flex items-center gap-2">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />

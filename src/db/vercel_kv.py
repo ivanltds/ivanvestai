@@ -172,112 +172,114 @@ class KVDatabase:
         self._execute_command("lpush", "dashboard:pnl_history", encoded_log)
         self._execute_command("ltrim", "dashboard:pnl_history", "0", "99")
         
-    def sync_with_binance(self, real_balances: dict):
+    def sync_with_binance(self, real_balances: dict = None):
         """
-        Sincroniza a memória com o saldo real da Binance.
-        Isso corrige divergências por conta de taxas da corretora
-        e ajusta o Preço Médio (PM) para a realidade matemática.
-        Atualiza também o Preço Atual e Preço Anterior para o Dashboard.
+        Sincroniza a carteira diretamente com a Binance (Fonte da Verdade Oficial).
+        Consulta os saldos reais, cotações ao vivo e o histórico oficial de trades
+        da Binance para calcular o Preço Médio (PM) e PnL com exatidão máxima.
         """
         import ccxt
-        positions = self.get_open_positions()
-        synced = False
-        
-        # 1. Buscar preços atuais na Binance para as moedas em memória
-        tickers = {}
-        if positions:
-            try:
-                exchange = ccxt.binance({'enableRateLimit': True})
-                # Evita chamadas inválidas buscando 1 por 1 ou fetch_tickers se suportado
-                for symbol in positions.keys():
-                    try:
-                        ticker = exchange.fetch_ticker(symbol)
-                        tickers[symbol] = ticker['last']
-                    except:
-                        pass
-            except Exception as e:
-                print(f"[DB] Aviso: Não foi possível buscar cotações para PnL: {e}")
-        
-        for symbol in list(positions.keys()):
-            if symbol in tickers:
-                new_price = tickers[symbol]
-                old_price = positions[symbol].get('current_price', new_price)
-                positions[symbol]['last_price'] = old_price
-                positions[symbol]['current_price'] = new_price
-                synced = True
+        from src.config import settings
 
-            base_coin = symbol.split('/')[0] if '/' in symbol else symbol
-            coin_qty = float(real_balances.get(base_coin, 0.0))
-            current_p = positions[symbol].get('current_price', 0.0)
-            val_brl = coin_qty * current_p
-            
-            # Se a posição foi liquidada ou restar apenas poeira (< R$ 2,00), remove da carteira
-            if coin_qty <= 0.00001 or (val_brl > 0 and val_brl < 2.0):
-                del positions[symbol]
-                synced = True
-            else:
-                if positions[symbol].get('total_coins', 0) != coin_qty:
-                    positions[symbol]['total_coins'] = coin_qty
-                    if coin_qty > 0:
-                        positions[symbol]['avg_price'] = positions[symbol].get('total_invested', 0) / coin_qty
-                    synced = True
-
-        
-        # 2. Detecta moedas com saldo real na Binance que ainda não estão registradas em posições
         try:
-            exchange = ccxt.binance({'enableRateLimit': True})
+            exchange = ccxt.binance({
+                'apiKey': settings.API_KEY,
+                'secret': settings.SECRET_KEY,
+                'enableRateLimit': True,
+            })
+            
+            # Se não recebeu real_balances, busca diretamente da Binance
+            if not real_balances:
+                bal_data = exchange.fetch_balance()
+                real_balances = {k: float(v) for k, v in bal_data.get('free', {}).items() if float(v) > 0.000001}
+
+            # Cotação do Dólar para normalização
+            try:
+                usdt_rate = float(exchange.fetch_ticker('USDT/BRL')['last'])
+            except:
+                usdt_rate = 5.17
+
+            old_positions = self.get_open_positions()
+            new_positions = {}
+
             for coin, qty in real_balances.items():
-                if coin == 'BRL' or qty <= 0.000001:
+                if coin in ['BRL', 'USDT'] or qty <= 0.00001:
                     continue
-                symbol = f"{coin}/BRL"
-                if symbol not in positions:
+
+                # Preço atual da moeda em BRL
+                cur_price = None
+                try:
+                    cur_price = float(exchange.fetch_ticker(f"{coin}/BRL")['last'])
+                except:
                     try:
-                        ticker = exchange.fetch_ticker(symbol)
-                        price = ticker['last']
-                        val_brl = qty * price
-                        if val_brl >= 2.0:  # Ignora poeira < R$2
-                            positions[symbol] = {
-                                "total_coins": qty,
-                                "total_invested": round(val_brl, 2),
-                                "avg_price": price,
-                                "current_price": price,
-                                "last_price": price
-                            }
-                            synced = True
-                            print(f"[DB] Nova posição detectada e sincronizada: {symbol} ({qty} moedas, R${val_brl:.2f})")
+                        cur_price = float(exchange.fetch_ticker(f"{coin}/USDT")['last']) * usdt_rate
                     except:
-                        # Tenta par via USDT se não houver par direto BRL
-                        try:
-                            t_usdt = exchange.fetch_ticker(f"{coin}/USDT")
-                            t_dolar = exchange.fetch_ticker("USDT/BRL")
-                            price_brl = t_usdt['last'] * t_dolar['last']
-                            val_brl = qty * price_brl
-                            if val_brl >= 2.0:
-                                positions[symbol] = {
-                                    "total_coins": qty,
-                                    "total_invested": round(val_brl, 2),
-                                    "avg_price": price_brl,
-                                    "current_price": price_brl,
-                                    "last_price": price_brl
-                                }
-                                synced = True
-                                print(f"[DB] Nova posição detectada via USDT: {symbol} ({qty} moedas, R${val_brl:.2f})")
-                        except:
-                            pass
-        except Exception as e:
-            print(f"[DB] Erro ao sincronizar novas posições: {e}")
+                        cur_price = 0.0
 
-        if synced:
+                val_brl = qty * (cur_price or 0.0)
+                # Ignora poeiras irrelevantes (< R$ 2,00)
+                if val_brl < 2.0:
+                    continue
+
+                symbol = f"{coin}/BRL"
+                old_entry = old_positions.get(symbol, {})
+                old_last_price = old_entry.get('current_price', cur_price)
+
+                # Consulta o histórico real de compras na Binance (fetch_my_trades) para extrair o PM oficial
+                total_cost_brl = 0.0
+                total_qty_bought = 0.0
+                for quote in ['BRL', 'USDT']:
+                    trade_sym = f"{coin}/{quote}"
+                    try:
+                        trades = exchange.fetch_my_trades(trade_sym)
+                        for t in trades:
+                            if t.get('side') == 'buy':
+                                cost = float(t.get('cost', 0.0))
+                                amount = float(t.get('amount', 0.0))
+                                if quote == 'USDT':
+                                    cost = cost * usdt_rate
+                                total_cost_brl += cost
+                                total_qty_bought += amount
+                    except Exception:
+                        pass
+
+                if total_qty_bought > 0:
+                    avg_price = round(total_cost_brl / total_qty_bought, 2)
+                    total_invested = round(qty * avg_price, 2)
+                else:
+                    avg_price = round(cur_price, 2)
+                    total_invested = round(val_brl, 2)
+
+                pnl_pct = round(((cur_price - avg_price) / avg_price) * 100, 2) if avg_price > 0 else 0.0
+
+                new_positions[symbol] = {
+                    "total_coins": qty,
+                    "total_invested": total_invested,
+                    "avg_price": avg_price,
+                    "current_price": round(cur_price, 2),
+                    "last_price": round(old_last_price, 2),
+                    "pnl_pct": pnl_pct
+                }
+
+            # Salva posições limpas e unificadas sem duplicatas
             import urllib.parse
-            encoded_val = urllib.parse.quote(json.dumps(positions), safe='')
+            encoded_val = urllib.parse.quote(json.dumps(new_positions), safe='')
             self._execute_command("set", "portfolio:open_positions", encoded_val)
-            print("[DB] Sincronização com a Binance concluída. Preços Médios e Atuais ajustados!")
 
-        # Salva os saldos gerais da conta (BRL em trânsito, USDT e Criptos)
-        if real_balances:
-            import urllib.parse
-            encoded_balances = urllib.parse.quote(json.dumps(real_balances), safe='')
-            self._execute_command("set", "portfolio:account_balances", encoded_balances)
+            # Salva o Total Alocado Oficial
+            total_invested_all = sum(p['total_invested'] for p in new_positions.values())
+            self.save_portfolio_value(total_invested_all)
+
+            # Salva saldos da conta
+            if real_balances:
+                encoded_balances = urllib.parse.quote(json.dumps(real_balances), safe='')
+                self._execute_command("set", "portfolio:account_balances", encoded_balances)
+
+            print(f"[DB] Posições e Preço Médio sincronizados oficialmente com a Binance: {list(new_positions.keys())}")
+
+        except Exception as e:
+            print(f"[DB] Erro ao sincronizar oficialmente com a Binance: {e}")
+
 
     def get_account_balances(self) -> dict:
         """Retorna os saldos reais de todas as moedas na conta da Binance"""

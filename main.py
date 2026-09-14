@@ -171,7 +171,9 @@ def main():
     # 1.5 Analista de Performance (Aprendizado)
     ag1_5 = PerformanceAnalystAgent()
     recent_logs = kv_db.get_audit_logs(limit=10)
+    kv_db.sync_with_binance()
     open_positions_memory = kv_db.get_open_positions()
+
     learned_lessons = ag1_5.generate_lessons(recent_logs, open_positions_memory)
     
     # 3. Gestor de Portfólio (Lê da Memória)

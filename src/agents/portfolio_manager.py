@@ -72,6 +72,9 @@ class PortfolioManagerAgent:
            Neste caso de queda além da normalidade, avalie as Notícias Atuais:
            - Se a notícia for catastrófica (fim do projeto, hack), envie ação de SELL para cortar perdas.
            - Se a notícia for apenas variação normal e os fundamentos intactos, envie ação de BUY para melhorar o preço médio (DCA).
+        REGRA 3 (DIVERSIFICAÇÃO OBRIGATÓRIA):
+           O fundo deve manter no MÍNIMO 5 ativos diferentes em carteira.
+           Se no "Histórico de Compras" houver menos de 5 ativos, PRIORIZE a aprovação de ordens de ativos NOVOS (que ainda não estão na carteira) a partir das "Propostas de Compra Novas".
         
         DADOS DE ENTRADA:
         1. Balanços Atuais na Binance: {json.dumps(current_balances)}

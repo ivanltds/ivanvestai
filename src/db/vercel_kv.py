@@ -300,4 +300,152 @@ class KVDatabase:
         encoded_val = urllib.parse.quote(json.dumps(entry), safe='')
         self._execute_command("set", "dashboard:current_sentiment", encoded_val)
 
+    # =========================================================================
+    # MÓDULO DAY TRADE SNIPER (ALTO RISCO - 10 MINUTOS)
+    # =========================================================================
+
+    def set_last_cycle_timestamp(self, ts: float = None):
+        """Grava o timestamp da última execução regular dos agentes para estimar o próximo ciclo."""
+        import time
+        t = ts or time.time()
+        self._execute_command("set", "system:last_cycle_timestamp", str(t))
+
+    def get_last_cycle_timestamp(self) -> float:
+        """Retorna o timestamp da última execução."""
+        data = self._execute_command("get", "system:last_cycle_timestamp")
+        try:
+            return float(data) if data else 0.0
+        except:
+            return 0.0
+
+    def get_daytrade_session(self) -> dict:
+        """Retorna a configuração e status da sessão atual de Day Trade."""
+        import urllib.parse
+        data = self._execute_command("get", "daytrade:session")
+        if data:
+            try:
+                decoded = urllib.parse.unquote(data) if isinstance(data, str) else data
+                return json.loads(decoded) if isinstance(decoded, str) else decoded
+            except:
+                return {}
+        return {}
+
+    def request_daytrade_session(self, capital: float, currency: str = "USDT") -> dict:
+        """Solicita o agendamento de uma sessão de Day Trade Sniper pelo frontend."""
+        import time, urllib.parse
+        session = {
+            "status": "pending",
+            "requested_at": time.time(),
+            "started_at": None,
+            "capital": float(capital),
+            "currency": currency.upper(),
+            "duration_sec": 600,
+            "grace_period_sec": 120,
+            "in_grace_period": False,
+            "current_position": None,
+            "total_trades": 0,
+            "winning_trades": 0,
+            "net_profit_fiat": 0.0,
+            "pnl_pct": 0.0
+        }
+        encoded = urllib.parse.quote(json.dumps(session), safe='')
+        self._execute_command("set", "daytrade:session", encoded)
+        # Limpa snapshots e trades anteriores para a nova sessão
+        self._execute_command("del", "daytrade:snapshots")
+        self._execute_command("del", "daytrade:microtrades")
+        return session
+
+    def start_daytrade_session(self, session_data: dict) -> dict:
+        """Inicia oficialmente a contagem regressiva da sessão Sniper pelo backend."""
+        import time, urllib.parse
+        session_data["status"] = "running"
+        session_data["started_at"] = time.time()
+        encoded = urllib.parse.quote(json.dumps(session_data), safe='')
+        self._execute_command("set", "daytrade:session", encoded)
+        return session_data
+
+    def update_daytrade_session(self, session_data: dict):
+        """Atualiza os dados de estado em tempo real da sessão Sniper."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(session_data), safe='')
+        self._execute_command("set", "daytrade:session", encoded)
+
+    def save_daytrade_snapshot(self, snapshot: dict):
+        """Salva um snapshot da posição a cada 30 segundos."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(snapshot), safe='')
+        self._execute_command("rpush", "daytrade:snapshots", encoded)
+
+    def get_daytrade_snapshots(self) -> list:
+        """Retorna todos os snapshots de 30s da sessão atual."""
+        import urllib.parse
+        data = self._execute_command("lrange", "daytrade:snapshots", "0", "-1")
+        if data and isinstance(data, list):
+            res = []
+            for item in data:
+                try:
+                    decoded = urllib.parse.unquote(item) if isinstance(item, str) else item
+                    res.append(json.loads(decoded) if isinstance(decoded, str) else decoded)
+                except:
+                    pass
+            return res
+        return []
+
+    def record_daytrade_microtrade(self, trade: dict):
+        """Registra um micro-trade de compra/venda concluído na sessão."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(trade), safe='')
+        self._execute_command("rpush", "daytrade:microtrades", encoded)
+
+    def get_daytrade_microtrades(self) -> list:
+        """Retorna a lista de micro-trades da sessão."""
+        import urllib.parse
+        data = self._execute_command("lrange", "daytrade:microtrades", "0", "-1")
+        if data and isinstance(data, list):
+            res = []
+            for item in data:
+                try:
+                    decoded = urllib.parse.unquote(item) if isinstance(item, str) else item
+                    res.append(json.loads(decoded) if isinstance(decoded, str) else decoded)
+                except:
+                    pass
+            return res
+        return []
+
+    def finish_daytrade_session(self, summary: dict):
+        """Finaliza a sessão, salva no Diário de Bordo oficial e desliga o botão."""
+        import time, urllib.parse
+        session = self.get_daytrade_session()
+        session["status"] = "completed"
+        session["finished_at"] = time.time()
+        session["summary"] = summary
+        encoded = urllib.parse.quote(json.dumps(session), safe='')
+        self._execute_command("set", "daytrade:session", encoded)
+
+        # Monta a entrada completa para o Diário de Bordo (Audit Log)
+        audit_entry = {
+            "timestamp": int(time.time()),
+            "is_daytrade": True,
+            "session_summary": summary,
+            "snapshots": self.get_daytrade_snapshots(),
+            "trades": self.get_daytrade_microtrades(),
+            "news_summary": f"⚡ Sessão Day Trade Sniper finalizada: {summary.get('net_profit_fiat', 0):+.2f} {session.get('currency', 'USDT')} ({summary.get('pnl_pct', 0):+.2f}%) em {summary.get('duration_str', '10m')}.",
+            "directives_applied": f"Day Trade Sniper ({session.get('capital')} {session.get('currency')})"
+        }
+        self.save_audit_log(audit_entry)
+
+    def cancel_daytrade_session(self):
+        """Cancela a sessão e retorna o estado para inativo."""
+        import urllib.parse
+        session = {
+            "status": "idle",
+            "requested_at": None,
+            "started_at": None,
+            "capital": 0,
+            "currency": "USDT"
+        }
+        encoded = urllib.parse.quote(json.dumps(session), safe='')
+        self._execute_command("set", "daytrade:session", encoded)
+
 kv_db = KVDatabase()
+

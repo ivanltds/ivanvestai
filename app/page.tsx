@@ -2,6 +2,7 @@ import { Redis } from '@upstash/redis'
 import { revalidatePath } from 'next/cache'
 import Link from 'next/link'
 import PortfolioPieChart from './components/PortfolioPieChart'
+import SniperDaytradePanel from './components/SniperDaytradePanel'
 
 const redis = new Redis({
   url: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '',
@@ -16,7 +17,9 @@ export default async function DashboardPage() {
     pnlHistoryRaw, 
     auditLogsRaw, 
     activeDirective,
-    accountBalancesRaw
+    accountBalancesRaw,
+    daytradeSessionRaw,
+    daytradeTradesRaw,
   ] = await Promise.all([
     redis.get<any>('portfolio:open_positions'),
     redis.get<any>('dashboard:current_sentiment'),
@@ -24,6 +27,8 @@ export default async function DashboardPage() {
     redis.lrange<any>('dashboard:audit_logs', 0, 10),
     redis.get<string>('ai:user_directives'),
     redis.get<any>('portfolio:account_balances'),
+    redis.get<any>('daytrade:session'),
+    redis.lrange<any>('daytrade:trades', 0, 40),
   ])
 
   // Como o Python salva com urllib.parse.quote, precisamos de-codificar o URL (ex: %7B vira {) antes do JSON parse
@@ -42,6 +47,10 @@ export default async function DashboardPage() {
   const accountBalances = safeParse(accountBalancesRaw, {})
   const brlBalance = parseFloat(accountBalances.BRL || 0)
   const usdtBalance = parseFloat(accountBalances.USDT || 0)
+  
+  // Sessão e Micro-trades de Day Trade
+  const daytradeSession = safeParse(daytradeSessionRaw, null)
+  const daytradeTrades = (daytradeTradesRaw || []).map((t: any) => safeParse(t, {})).reverse()
   
   // Para arrays vindos do Upstash
   const auditLogs = (auditLogsRaw || []).map((log: any) => safeParse(log, {}))
@@ -223,8 +232,11 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        {/* COLUNA CENTRAL: O Diário de Bordo */}
+        {/* COLUNA CENTRAL: O Diário de Bordo & Day Trade */}
         <div className="lg:col-span-2 space-y-8">
+          {/* MODO SNIPER DAY TRADE (10 MIN) */}
+          <SniperDaytradePanel />
+
           <section className="bg-neutral-900/50 rounded-2xl border border-neutral-800 p-6 backdrop-blur-sm">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-xl font-bold text-white flex items-center">
@@ -292,7 +304,88 @@ export default async function DashboardPage() {
               Diário de Bordo (Audit Log)
             </h2>
             <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
-              {auditLogs.length === 0 && (
+              {/* CARD EXCLUSIVO DE DAY TRADE SE HOUVER SESSÃO INICIADA OU CONCLUÍDA */}
+              {daytradeSession && daytradeSession.started_at && (
+                <div className={`p-4 rounded-xl border relative pl-6 transition-all ${
+                  daytradeSession.status === 'running'
+                    ? 'border-rose-500/50 bg-rose-950/20 shadow-[0_0_20px_rgba(244,63,94,0.15)]'
+                    : 'border-neutral-700 bg-neutral-900/80'
+                }`}>
+                  <div className={`absolute left-2 top-4 w-3 h-3 rounded-full border-[3px] border-neutral-950 z-10 ${
+                    daytradeSession.status === 'running' ? 'bg-rose-500 animate-ping' : 'bg-rose-400'
+                  }`}></div>
+
+                  <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs text-neutral-400 font-mono">
+                        {new Date(daytradeSession.started_at).toLocaleString('pt-BR')}
+                      </p>
+                      <span className="px-2.5 py-0.5 bg-rose-500/20 text-rose-300 text-[10px] font-extrabold rounded-full border border-rose-500/40 uppercase tracking-wider">
+                        ⚡ SNIPER DAY TRADE (10 MIN)
+                      </span>
+                      {daytradeSession.status === 'running' && (
+                        <span className="px-2 py-0.5 bg-rose-600 text-white text-[10px] font-bold rounded animate-pulse">
+                          AO VIVO
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-neutral-400">
+                        Capital: <strong className="text-white">{daytradeSession.currency === 'BRL' ? `R$ ${daytradeSession.capital?.toFixed(2)}` : `$ ${daytradeSession.capital?.toFixed(2)} USDT`}</strong>
+                      </span>
+                      <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${
+                        (daytradeSession.total_pnl_pct || 0) >= 0 ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/60' : 'bg-rose-950/80 text-rose-400 border border-rose-800/60'
+                      }`}>
+                        {(daytradeSession.total_pnl_pct || 0) >= 0 ? '+' : ''}{(daytradeSession.total_pnl_pct || 0).toFixed(2)}% PnL
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="text-sm text-neutral-200 mb-2">
+                    {daytradeSession.status === 'running'
+                      ? `Sessão ativa operando ${daytradeSession.symbol}. Monitorando Bandas de Bollinger, RSI-7 e VWAP.`
+                      : `Sessão concluída em ${daytradeSession.finished_at ? new Date(daytradeSession.finished_at).toLocaleTimeString('pt-BR') : '10 min'}. ${daytradeSession.reason || ''}`}
+                  </p>
+
+                  {/* TABELA DETALHADA DAS OPERAÇÕES DO DAY TRADE */}
+                  {daytradeTrades.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-neutral-800/80">
+                      <p className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2">
+                        Detalhamento das Operações ({daytradeTrades.length})
+                      </p>
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                        {daytradeTrades.map((t: any, tidx: number) => {
+                          const isBuy = t.action === 'BUY'
+                          return (
+                            <div key={tidx} className="flex justify-between items-center p-2 rounded-lg bg-neutral-950/70 border border-neutral-800/60 text-xs font-mono">
+                              <div className="flex items-center gap-2">
+                                <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${
+                                  isBuy ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                }`}>
+                                  {isBuy ? 'COMPRA' : 'VENDA'}
+                                </span>
+                                <span className="text-neutral-400">{t.timestamp ? new Date(t.timestamp).toLocaleTimeString('pt-BR') : ''}</span>
+                                <span className="text-neutral-300 font-semibold">{t.qty?.toFixed(6)} BTC</span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-neutral-400">@ {t.price?.toLocaleString('pt-BR', { style: 'currency', currency: t.currency || 'BRL' })}</span>
+                                {t.pnl_pct !== undefined && (
+                                  <span className={`font-bold ${t.pnl_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    {t.pnl_pct >= 0 ? '+' : ''}{t.pnl_pct.toFixed(2)}%
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {auditLogs.length === 0 && !daytradeSession && (
                 <p className="text-neutral-500 italic">Nenhum log de execução encontrado.</p>
               )}
               {auditLogs.map((log: any, idx: number) => {

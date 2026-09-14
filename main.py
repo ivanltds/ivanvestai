@@ -157,6 +157,9 @@ def execute_order(order, exchange):
 def main():
     print("=== INICIANDO COMITÊ DO FUNDO HEDGE IVANVEST AI ===")
     
+    # Atualiza o timestamp do ciclo ativo para cálculo de estimativas
+    kv_db.set_last_cycle_timestamp()
+    
     # Carrega configurações do Redis (com fallback para variáveis de ambiente)
     bot_config = kv_db.get_bot_config()
     dry_run = bot_config.get("dry_run", True)
@@ -164,6 +167,26 @@ def main():
     min_order = bot_config.get("min_order_brl", 8.0)
     max_order = bot_config.get("max_order_brl", 200.0)
     print(f"[Config] Dry Run={dry_run} | DCA={dca_amount}BRL | Min={min_order}BRL | Max={max_order}BRL")
+
+    # MODO SNIPER DAY TRADE (Se solicitado pelo Frontend)
+    daytrade_session = kv_db.get_daytrade_session()
+    if daytrade_session and daytrade_session.get("status") == "pending":
+        print("\n=======================================================")
+        print(">>> DISPARANDO MODO SNIPER DAY TRADE DE ALTO RISCO <<<")
+        print("=======================================================")
+        from src.agents.sniper_trader import SniperTraderAgent
+        sniper = SniperTraderAgent(
+            capital=float(daytrade_session.get("capital", 50.0)),
+            currency=daytrade_session.get("currency", "BRL"),
+            symbol=daytrade_session.get("symbol", "BTC/BRL"),
+            dry_run=dry_run
+        )
+        try:
+            sniper_res = sniper.run_session(duration_minutes=10)
+            print(f"[Sniper Daytrade] Sessão finalizada. Retorno: {sniper_res.get('total_pnl_pct', 0.0):+.2f}% | Operações: {sniper_res.get('trades_count', 0)}")
+        except Exception as e:
+            print(f"[Sniper Daytrade] Erro ao executar sessão: {e}")
+            kv_db.finish_daytrade_session({"status": "completed", "error": str(e)})
 
     # 0. Guardião da Memória (Puxa diretrizes do humano)
     ag0 = MemoryAgent()

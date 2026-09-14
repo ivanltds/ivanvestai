@@ -16,7 +16,7 @@ class MemoryAgent:
             return user_directives
         return ""
         
-    def commit_cycle(self, news_insights: dict, final_trades: list, current_balances: dict, learned_lessons: str = ""):
+    def commit_cycle(self, news_insights: dict, final_trades: list, current_balances: dict, learned_lessons: str = "", dry_run: bool = True):
         """
         Salva tudo que aconteceu na execução para o Dashboard ler depois.
         """
@@ -29,6 +29,7 @@ class MemoryAgent:
         # 2. Salva o Diário de Bordo (Audit Log)
         audit_entry = {
             "timestamp": int(time.time()),
+            "dry_run": dry_run,
             "news_summary": news_insights.get("summary", ""),
             "news_sources": news_insights.get("sources", []),
             "learned_lessons": learned_lessons,

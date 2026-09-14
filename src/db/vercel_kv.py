@@ -100,6 +100,36 @@ class KVDatabase:
         """Lê instruções injetadas pelo usuário (Overrides). Expiram sozinhas no Redis via TTL."""
         data = self._execute_command("get", "ai:user_directives")
         return data if data else ""
+
+    def get_bot_config(self) -> dict:
+        """Lê todas as configurações do bot salvas pelo frontend."""
+        defaults = {
+            "dry_run": True,
+            "dca_amount_brl": 50.0,
+            "min_order_brl": 8.0,
+            "max_order_brl": 200.0,
+            "max_memecoin_pct": 20,
+            "min_assets": 5,
+            "min_stop_pct": 5,
+            "max_stop_pct": 25,
+        }
+        try:
+            import urllib.parse
+            raw = self._execute_command("get", "config:bot_settings")
+            if raw:
+                decoded = urllib.parse.unquote(raw) if isinstance(raw, str) else raw
+                data = json.loads(decoded) if isinstance(decoded, str) else decoded
+                defaults.update(data)
+        except Exception as e:
+            print(f"[DB] Erro ao ler config: {e}")
+        return defaults
+
+    def save_bot_config(self, config: dict):
+        """Salva as configurações do bot no Redis."""
+        import urllib.parse
+        encoded = urllib.parse.quote(json.dumps(config), safe='')
+        self._execute_command("set", "config:bot_settings", encoded)
+        print("[DB] Configurações salvas com sucesso.")
         
     def get_audit_logs(self, limit: int = 10) -> list:
         """Lê os últimos N logs."""

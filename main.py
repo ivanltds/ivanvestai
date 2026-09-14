@@ -43,7 +43,8 @@ def execute_order(order, exchange):
         
         if action == 'BUY':
             crypto_qty = fiat_amount / price
-            if settings.DRY_RUN:
+            is_dry_run = order.get('dry_run', True)
+            if is_dry_run:
                 print(f"[DRY_RUN] SIMULADO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL")
             else:
                 print(f"[LIVE] EXECUTANDO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL")
@@ -55,16 +56,16 @@ def execute_order(order, exchange):
                 "action": "BUY",
                 "price": price,
                 "crypto_qty": crypto_qty,
-                "fiat_amount": fiat_amount
+                "fiat_amount": fiat_amount,
+                "dry_run": is_dry_run
             }
             
         elif action == 'SELL':
-            # Se for SELL, vamos vender tudo o que temos na memória ou a quantidade total real
-            # Para simplificar na Fase 4: Venda de TODO o saldo (Stop Loss/Take profit daquela moeda)
             positions = kv_db.get_open_positions()
             if symbol in positions:
                 crypto_qty = positions[symbol]['total_coins']
-                if settings.DRY_RUN:
+                is_dry_run = order.get('dry_run', True)
+                if is_dry_run:
                     print(f"[DRY_RUN] SIMULADO: VENDA de {crypto_qty:.6f} {symbol} (Stop Loss/DCA)")
                 else:
                     print(f"[LIVE] EXECUTANDO: VENDA de {crypto_qty:.6f} {symbol}")
@@ -76,7 +77,8 @@ def execute_order(order, exchange):
                     "action": "SELL",
                     "price": price,
                     "crypto_qty": crypto_qty,
-                    "fiat_amount": crypto_qty * price
+                    "fiat_amount": crypto_qty * price,
+                    "dry_run": is_dry_run
                 }
             else:
                 print(f"[ERRO DE LÓGICA] IA tentou vender {symbol} mas não temos histórico na memória.")
@@ -92,6 +94,14 @@ def execute_order(order, exchange):
 def main():
     print("=== INICIANDO COMITÊ DO FUNDO HEDGE IVANVEST AI ===")
     
+    # Carrega configurações do Redis (com fallback para variáveis de ambiente)
+    bot_config = kv_db.get_bot_config()
+    dry_run = bot_config.get("dry_run", True)
+    dca_amount = bot_config.get("dca_amount_brl", 50.0)
+    min_order = bot_config.get("min_order_brl", 8.0)
+    max_order = bot_config.get("max_order_brl", 200.0)
+    print(f"[Config] Dry Run={dry_run} | DCA={dca_amount}BRL | Min={min_order}BRL | Max={max_order}BRL")
+
     # 0. Guardião da Memória (Puxa diretrizes do humano)
     ag0 = MemoryAgent()
     user_directives = ag0.fetch_context()
@@ -125,7 +135,7 @@ def main():
     final_orders = ag5.review_orders(final_orders)
     
     if final_orders:
-        print("=== INICIANDO EXECUÇÃO (SIMULAÇÃO) ===" if settings.DRY_RUN else "=== INICIANDO EXECUÇÃO (MERCADO REAL) ===")
+        print("=== INICIANDO EXECUÇÃO (SIMULAÇÃO) ===" if dry_run else "=== INICIANDO EXECUÇÃO (MERCADO REAL) ===")
         exchange = ccxt.binance({
             'apiKey': settings.API_KEY,
             'secret': settings.SECRET_KEY,
@@ -134,6 +144,8 @@ def main():
         
         executed_trades = []
         for order in final_orders:
+            # Injeta o modo dry_run em cada ordem
+            order['dry_run'] = dry_run
             res = execute_order(order, exchange)
             if res: executed_trades.append(res)
             
@@ -145,7 +157,7 @@ def main():
         print("Comitê decidiu NÃO operar nesta hora.")
         
     # 0. Finaliza o ciclo salvando o log no Dashboard
-    ag0.commit_cycle(news_insights, executed_trades, current_balances, learned_lessons)
+    ag0.commit_cycle(news_insights, executed_trades, current_balances, learned_lessons, dry_run)
     
     print("=== CICLO CONCLUÍDO COM SUCESSO ===")
 

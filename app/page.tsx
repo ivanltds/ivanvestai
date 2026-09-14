@@ -1,5 +1,6 @@
 import { Redis } from '@upstash/redis'
 import { revalidatePath } from 'next/cache'
+import Link from 'next/link'
 import PortfolioPieChart from './components/PortfolioPieChart'
 
 const redis = new Redis({
@@ -69,11 +70,20 @@ export default async function DashboardPage() {
       <header className="mb-12 border-b border-neutral-800 pb-6 flex justify-between items-end">
         <div>
           <h1 className="text-4xl font-extrabold tracking-tight text-white mb-2">Ivanvest<span className="text-emerald-500">AI</span></h1>
-          <p className="text-neutral-400">Terminal Quantitativo & Diário de Bordo</p>
+          <p className="text-neutral-400">Terminal Quantitativo &amp; Diário de Bordo</p>
         </div>
-        <div className="text-right">
-          <p className="text-sm text-neutral-500 mb-1">Total Alocado (Histórico)</p>
-          <p className="text-3xl font-bold text-white">{formatCurrency(currentPnl)}</p>
+        <div className="flex items-end gap-6">
+          <div className="text-right">
+            <p className="text-sm text-neutral-500 mb-1">Total Alocado (Histórico)</p>
+            <p className="text-3xl font-bold text-white">{formatCurrency(currentPnl)}</p>
+          </div>
+          <Link href="/settings" className="px-4 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-sm font-semibold text-white transition-colors flex items-center gap-2">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            Configurações
+          </Link>
         </div>
       </header>
 
@@ -256,12 +266,19 @@ export default async function DashboardPage() {
                 const date = new Date(entry.timestamp * 1000).toLocaleString('pt-BR')
                 
                 return (
-                  <div key={idx} className="p-4 rounded-xl border border-neutral-800/50 bg-neutral-950/50 relative pl-6">
+                  <div key={idx} className={`p-4 rounded-xl border relative pl-6 ${entry.dry_run ? 'border-amber-900/40 bg-amber-950/10' : 'border-neutral-800/50 bg-neutral-950/50'}`}>
                     {/* Linha da timeline */}
                     <div className="absolute left-[11px] top-8 bottom-[-16px] w-[2px] bg-neutral-800 z-0"></div>
-                    <div className="absolute left-2 top-4 w-3 h-3 rounded-full bg-neutral-600 border-[3px] border-neutral-950 z-10"></div>
+                    <div className={`absolute left-2 top-4 w-3 h-3 rounded-full border-[3px] border-neutral-950 z-10 ${entry.dry_run ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
                     
-                    <p className="text-xs text-neutral-500 mb-2 font-mono">{date}</p>
+                    <div className="flex items-center gap-2 mb-2">
+                      <p className="text-xs text-neutral-500 font-mono">{date}</p>
+                      {entry.dry_run && (
+                        <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-bold rounded border border-amber-500/30 tracking-wider">
+                          SIM
+                        </span>
+                      )}
+                    </div>
                     <p className="text-sm text-neutral-300 mb-3">{entry.news_summary}</p>
                     
                     {entry.news_sources && entry.news_sources.length > 0 && (

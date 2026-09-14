@@ -15,8 +15,8 @@ from src.agents.risk_reviewer import RiskReviewerAgent
 def get_binance_balances():
     """Conecta na Binance e traz os saldos atuais"""
     exchange = ccxt.binance({
-        'apiKey': settings.BINANCE_API_KEY,
-        'secret': settings.BINANCE_SECRET_KEY,
+        'apiKey': settings.API_KEY,
+        'secret': settings.SECRET_KEY,
         'enableRateLimit': True,
     })
     try:
@@ -28,19 +28,26 @@ def get_binance_balances():
         return {}
 
 def execute_order(order, exchange):
-    """Executa a ordem a mercado"""
+    """Executa a ordem a mercado com tratamento de erro de Símbolo"""
     symbol = order['symbol']
     fiat_amount = order['fiat_amount']
-    # Busca o preço atual para calcular quantidade de crypto
-    ticker = exchange.fetch_ticker(symbol)
-    price = ticker['last']
-    crypto_qty = fiat_amount / price
     
-    if settings.DRY_RUN:
-        print(f"[DRY_RUN] SIMULADO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL/USDT")
-    else:
-        print(f"[LIVE] EXECUTANDO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL/USDT")
-        exchange.create_market_buy_order(symbol, crypto_qty)
+    try:
+        # Busca o preço atual para calcular quantidade de crypto
+        ticker = exchange.fetch_ticker(symbol)
+        price = ticker['last']
+        crypto_qty = fiat_amount / price
+        
+        if settings.DRY_RUN:
+            print(f"[DRY_RUN] SIMULADO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL")
+        else:
+            print(f"[LIVE] EXECUTANDO: Compra de {crypto_qty:.6f} {symbol} por {fiat_amount} BRL")
+            exchange.create_market_buy_order(symbol, crypto_qty)
+            
+    except ccxt.BadSymbol:
+        print(f"[ERRO DE MERCADO] A moeda {symbol} não existe ou não tem par com BRL na Binance. Ordem descartada.")
+    except Exception as e:
+        print(f"[ERRO DE EXECUÇÃO] Falha ao executar {symbol}: {e}")
 
 def main():
     print("=== INICIANDO COMITÊ DO FUNDO HEDGE IVANVEST AI ===")
@@ -73,8 +80,8 @@ def main():
         
     print(f"=== INICIANDO EXECUÇÃO ({'SIMULAÇÃO' if settings.DRY_RUN else 'REAL'}) ===")
     exchange = ccxt.binance({
-        'apiKey': settings.BINANCE_API_KEY,
-        'secret': settings.BINANCE_SECRET_KEY,
+        'apiKey': settings.API_KEY,
+        'secret': settings.SECRET_KEY,
         'enableRateLimit': True,
     })
     

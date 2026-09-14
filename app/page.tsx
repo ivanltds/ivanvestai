@@ -83,21 +83,6 @@ export default async function DashboardPage() {
         <div className="space-y-8">
           <section className="bg-neutral-900/50 rounded-2xl border border-neutral-800 p-6 backdrop-blur-sm">
             <h2 className="text-xl font-bold text-white mb-4 flex items-center">
-              <span className="w-2 h-2 rounded-full bg-blue-500 mr-2"></span>
-              Sentimento de Mercado
-            </h2>
-            <div className={`p-4 rounded-xl border ${
-              sentiment.is_bullish ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-            }`}>
-              <h3 className="font-bold text-lg mb-2">
-                {sentiment.is_bullish ? '🐂 Bull Market (Greed)' : '🐻 Bear Market (Fear)'}
-              </h3>
-              <p className="text-sm opacity-90 leading-relaxed">{sentiment.summary}</p>
-            </div>
-          </section>
-
-          <section className="bg-neutral-900/50 rounded-2xl border border-neutral-800 p-6 backdrop-blur-sm">
-            <h2 className="text-xl font-bold text-white mb-4 flex items-center">
               <span className="w-2 h-2 rounded-full bg-amber-500 mr-2"></span>
               Posições Abertas
             </h2>
@@ -142,6 +127,21 @@ export default async function DashboardPage() {
                   </div>
                 )
               })}
+            </div>
+          </section>
+
+          <section className="bg-neutral-900/50 rounded-2xl border border-neutral-800 p-6 backdrop-blur-sm">
+            <h2 className="text-xl font-bold text-white mb-4 flex items-center">
+              <span className="w-2 h-2 rounded-full bg-blue-500 mr-2"></span>
+              Sentimento de Mercado
+            </h2>
+            <div className={`p-4 rounded-xl border ${
+              sentiment.is_bullish ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+            }`}>
+              <h3 className="font-bold text-lg mb-2">
+                {sentiment.is_bullish ? '🐂 Bull Market (Greed)' : '🐻 Bear Market (Fear)'}
+              </h3>
+              <p className="text-sm opacity-90 leading-relaxed">{sentiment.summary}</p>
             </div>
           </section>
         </div>

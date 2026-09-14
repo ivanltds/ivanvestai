@@ -106,7 +106,7 @@ export default function DailyTradingSummaryCard({
       <section className="bg-neutral-900/60 rounded-2xl border border-neutral-800/80 p-5 backdrop-blur-md transition-all hover:border-neutral-700/80 group">
         <div className="flex items-center justify-between pb-3 border-b border-neutral-800/60 mb-4">
           <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+            <div className="p-1.5 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-300">
               <Activity className="w-4 h-4" />
             </div>
             <div>
@@ -137,11 +137,7 @@ export default function DailyTradingSummaryCard({
           <div className="p-3 rounded-xl bg-neutral-950/70 border border-neutral-800/80">
             <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 mb-1 flex items-center gap-1">
               Líquido USDT
-              {netUsdt >= 0 ? (
-                <TrendingUp className="w-3 h-3 text-emerald-400" />
-              ) : (
-                <TrendingDown className="w-3 h-3 text-rose-400" />
-              )}
+              <TrendingUp className="w-3 h-3 text-neutral-400" />
             </p>
             <p
               className={`text-base font-mono font-bold ${
@@ -160,11 +156,7 @@ export default function DailyTradingSummaryCard({
           <div className="p-3 rounded-xl bg-neutral-950/70 border border-neutral-800/80">
             <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 mb-1 flex items-center gap-1">
               Líquido BRL
-              {netBrl >= 0 ? (
-                <TrendingUp className="w-3 h-3 text-emerald-400" />
-              ) : (
-                <TrendingDown className="w-3 h-3 text-rose-400" />
-              )}
+              <TrendingUp className="w-3 h-3 text-neutral-400" />
             </p>
             <p
               className={`text-base font-mono font-bold ${
@@ -188,7 +180,7 @@ export default function DailyTradingSummaryCard({
             {/* Barra de Progresso */}
             <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden mb-1.5">
               <div
-                className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                className="h-full bg-neutral-300 rounded-full transition-all duration-500"
                 style={{ width: `${Math.min(100, Math.max(0, winRate))}%` }}
               />
             </div>
@@ -209,7 +201,7 @@ export default function DailyTradingSummaryCard({
             {/* Header Modal */}
             <div className="p-5 border-b border-neutral-800 flex items-center justify-between bg-neutral-900/50">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <div className="p-2 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-300">
                   <Activity className="w-5 h-5" />
                 </div>
                 <div>
@@ -316,13 +308,7 @@ export default function DailyTradingSummaryCard({
                       className="p-3 rounded-xl bg-neutral-900/60 border border-neutral-800 hover:border-neutral-700 transition-all flex items-center justify-between text-xs font-mono"
                     >
                       <div className="flex items-center gap-3">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                            isBuy
-                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                              : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                          }`}
-                        >
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-neutral-800 text-neutral-300 border-neutral-700">
                           {isBuy ? 'COMPRA' : 'VENDA'}
                         </span>
                         <div>

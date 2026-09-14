@@ -142,15 +142,7 @@ export default function CurrentDaytradeSession() {
       {/* 1. HEADER DA SESSÃO DAYTRADE */}
       <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-neutral-800/80">
         <div className="flex items-center gap-2.5">
-          <div
-            className={`p-2 rounded-xl border ${
-              isRunning
-                ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 animate-pulse'
-                : isPending
-                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
-                : 'bg-neutral-800/60 border-neutral-700/60 text-neutral-400'
-            }`}
-          >
+          <div className="p-2 rounded-xl border bg-neutral-800 border-neutral-700 text-neutral-300">
             <Zap className="w-4 h-4" />
           </div>
           <div>
@@ -163,7 +155,7 @@ export default function CurrentDaytradeSession() {
                   : 'Sessão Day Trade (10 min)'}
               </h2>
               {isRunning && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-rose-500/20 text-rose-400 border border-rose-500/40 animate-pulse">
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-neutral-800 text-neutral-200 border border-neutral-700">
                   Ao Vivo
                 </span>
               )}
@@ -180,13 +172,13 @@ export default function CurrentDaytradeSession() {
           <div
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono ${
               btcMacro?.healthy !== false
-                ? 'bg-emerald-950/40 border-emerald-800/50 text-emerald-300'
+                ? 'bg-neutral-900 border-neutral-800 text-neutral-300'
                 : 'bg-rose-950/40 border-rose-800/50 text-rose-300'
             }`}
             title={btcMacro?.reason || 'Status do Gatekeeper BTC'}
           >
             {btcMacro?.healthy !== false ? (
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <ShieldCheck className="w-3.5 h-3.5 text-neutral-400" />
             ) : (
               <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
             )}
@@ -213,9 +205,9 @@ export default function CurrentDaytradeSession() {
               type="button"
               onClick={handleStopSession}
               disabled={isSubmitting}
-              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-xs font-mono transition-colors"
+              className="flex items-center gap-1 px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 text-xs font-mono transition-colors"
             >
-              <Square className="w-3 h-3" />
+              <Square className="w-3 h-3 text-neutral-400" />
               <span>Encerrar</span>
             </button>
           ) : (
@@ -223,9 +215,9 @@ export default function CurrentDaytradeSession() {
               type="button"
               onClick={handleManualTrigger}
               disabled={isSubmitting || isPending}
-              className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white border border-neutral-700/80 text-xs font-mono font-semibold transition-all hover:border-emerald-500/60"
+              className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-white border border-neutral-700/80 text-xs font-mono font-semibold transition-all hover:border-neutral-500"
             >
-              <Play className="w-3 h-3 text-emerald-400 fill-emerald-400" />
+              <Play className="w-3 h-3 text-white fill-white" />
               <span>Disparar Agora</span>
             </button>
           )}

@@ -60,17 +60,17 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
   const getBadgeStyle = (tag?: string) => {
     switch (tag) {
       case 'COMPRA':
-        return 'bg-emerald-950/70 text-emerald-400 border-emerald-700/50'
+        return 'bg-neutral-900 text-neutral-300 border-neutral-800'
       case 'VENDA':
-        return 'bg-rose-950/70 text-rose-300 border-rose-700/50'
+        return 'bg-neutral-900 text-neutral-300 border-neutral-800'
       case 'MANTER':
-        return 'bg-sky-950/70 text-sky-300 border-sky-700/50'
+        return 'bg-neutral-900 text-neutral-300 border-neutral-800'
       case 'SCANNER':
-        return 'bg-purple-950/70 text-purple-300 border-purple-700/50'
+        return 'bg-neutral-900 text-neutral-300 border-neutral-800'
       case 'PROTEÇÃO':
         return 'bg-amber-950/70 text-amber-300 border-amber-700/50'
       case 'RESULTADO':
-        return 'bg-emerald-950/90 text-emerald-200 border-emerald-500/60 font-bold'
+        return 'bg-neutral-800 text-neutral-200 border-neutral-700 font-bold'
       default:
         return 'bg-neutral-800 text-neutral-300 border-neutral-700'
     }
@@ -79,17 +79,17 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
   const renderIcon = (tag?: string) => {
     switch (tag) {
       case 'COMPRA':
-        return <ArrowUpRight className="w-3 h-3 text-emerald-400" />
+        return <ArrowUpRight className="w-3 h-3 text-neutral-400" />
       case 'VENDA':
-        return <ArrowDownRight className="w-3 h-3 text-rose-400" />
+        return <ArrowDownRight className="w-3 h-3 text-neutral-400" />
       case 'MANTER':
-        return <Clock className="w-3 h-3 text-sky-400" />
+        return <Clock className="w-3 h-3 text-neutral-400" />
       case 'SCANNER':
-        return <Search className="w-3 h-3 text-purple-400" />
+        return <Search className="w-3 h-3 text-neutral-400" />
       case 'PROTEÇÃO':
         return <Shield className="w-3 h-3 text-amber-400" />
       case 'RESULTADO':
-        return <Award className="w-3 h-3 text-emerald-400" />
+        return <Award className="w-3 h-3 text-neutral-300" />
       default:
         return <MessageSquare className="w-3 h-3 text-neutral-400" />
     }
@@ -205,7 +205,7 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
       {/* Rodapé: Indicador de Atividade ao Vivo */}
       {isRunning && (
         <div className="pt-2 border-t border-neutral-800/80 flex items-center gap-2 text-[11px] text-neutral-400 font-mono">
-          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping"></span>
+          <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 animate-ping"></span>
           <span>Sniper AI analisando ticks e avaliando saídas dinâmicas...</span>
         </div>
       )}

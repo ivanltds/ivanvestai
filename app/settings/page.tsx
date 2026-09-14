@@ -22,12 +22,31 @@ const DEFAULTS = {
 
 export default async function SettingsPage() {
   // Carrega config atual
-  const raw = await redis.get<any>('config:bot_settings')
+  const [raw, rawAuto] = await Promise.all([
+    redis.get<any>('config:bot_settings'),
+    redis.get<any>('daytrade:auto_config'),
+  ])
+
   let config = { ...DEFAULTS }
   if (raw) {
     try {
       const parsed = typeof raw === 'string' ? JSON.parse(decodeURIComponent(raw)) : raw
       config = { ...DEFAULTS, ...parsed }
+    } catch { /* usa defaults */ }
+  }
+
+  let autoConfig = {
+    enabled: true,
+    interval_minutes: 60,
+    capital: 15.0,
+    currency: 'USDT',
+    source_asset: 'USDT',
+    last_run_timestamp: null,
+  }
+  if (rawAuto) {
+    try {
+      const decoded = typeof rawAuto === 'string' ? decodeURIComponent(rawAuto) : rawAuto
+      autoConfig = { ...autoConfig, ...(typeof decoded === 'string' ? JSON.parse(decoded) : decoded) }
     } catch { /* usa defaults */ }
   }
 
@@ -45,7 +64,33 @@ export default async function SettingsPage() {
       auto_deploy_deposits: formData.get('auto_deploy_deposits') === 'true',
       preferred_reserve: (formData.get('preferred_reserve') as string) || 'USDT',
     }
-    await redis.set('config:bot_settings', JSON.stringify(newConfig))
+
+    const autoEnabled = formData.get('sniper_auto_enabled') === 'true'
+    const autoCapital = parseFloat(formData.get('sniper_auto_capital') as string) || 15.0
+
+    const rawAutoCur = await redis.get<any>('daytrade:auto_config')
+    let currentAutoObj = {
+      enabled: true,
+      interval_minutes: 60,
+      capital: 15.0,
+      currency: 'USDT',
+      source_asset: 'USDT',
+      last_run_timestamp: null,
+    }
+    if (rawAutoCur) {
+      try {
+        const dec = typeof rawAutoCur === 'string' ? decodeURIComponent(rawAutoCur) : rawAutoCur
+        currentAutoObj = { ...currentAutoObj, ...(typeof dec === 'string' ? JSON.parse(dec) : dec) }
+      } catch {}
+    }
+    currentAutoObj.enabled = autoEnabled
+    currentAutoObj.capital = autoCapital
+
+    await Promise.all([
+      redis.set('config:bot_settings', JSON.stringify(newConfig)),
+      redis.set('daytrade:auto_config', encodeURIComponent(JSON.stringify(currentAutoObj))),
+    ])
+
     revalidatePath('/settings')
     revalidatePath('/')
   }
@@ -104,6 +149,89 @@ export default async function SettingsPage() {
                 <div className="text-xs opacity-70 mt-1">Dinheiro real</div>
               </div>
             </label>
+          </div>
+        </section>
+
+        {/* SNIPER DAY TRADE (MODO HORÁRIO AUTÔNOMO) */}
+        <section className="bg-neutral-900/50 rounded-2xl border border-neutral-800 p-6">
+          <div className="flex justify-between items-start flex-wrap gap-2 mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${autoConfig.enabled ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.5)]' : 'bg-neutral-600'}`}></span>
+                ⚡ Sniper Day Trade Autônomo (A cada 1 Hora)
+              </h2>
+              <p className="text-xs text-neutral-400 mt-1">
+                Varredura algorítmica de altcoins em pares USDT com alocação concentrada (100% no ativo #1) e saída por Stop ATR e Trailing Stop.
+              </p>
+            </div>
+            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase border ${
+              autoConfig.enabled
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                : 'bg-neutral-800 text-neutral-400 border-neutral-700'
+            }`}>
+              {autoConfig.enabled ? 'Sempre Ativo (Padrão)' : 'Desativado pelo Usuário'}
+            </span>
+          </div>
+
+          <div className={`p-4 rounded-xl border mb-5 ${
+            autoConfig.enabled ? 'bg-emerald-950/20 border-emerald-500/30' : 'bg-neutral-950 border-neutral-800'
+          }`}>
+            <p className={`text-sm font-semibold mb-1 ${autoConfig.enabled ? 'text-emerald-400' : 'text-neutral-400'}`}>
+              {autoConfig.enabled ? '⏱️ Rotina Horária Ativa: Disparo a cada 60 minutos' : '⏸️ Rotina Horária Desativada'}
+            </p>
+            <p className="text-xs text-neutral-400">
+              {autoConfig.enabled
+                ? 'O robô dispara uma varredura automática a cada 1 hora sem intervenção humana. Para pausar temporariamente as operações do Sniper, selecione "Desativado" abaixo e salve.'
+                : 'O Sniper não será executado automaticamente a cada hora. Para reativá-lo, selecione "Ativado" e clique em Salvar Configurações.'}
+            </p>
+          </div>
+
+          {/* Opções de Ativação / Desativação */}
+          <div className="flex gap-3 mb-5">
+            <label className="flex-1">
+              <input type="radio" name="sniper_auto_enabled" value="true" defaultChecked={autoConfig.enabled} className="sr-only peer" />
+              <div className="peer-checked:border-emerald-500 peer-checked:bg-emerald-950/30 peer-checked:text-emerald-400 border border-neutral-700 rounded-xl p-4 cursor-pointer text-center transition-all hover:border-neutral-600 text-neutral-400">
+                <div className="text-2xl mb-1">⏱️</div>
+                <div className="font-bold text-sm">Ativado (Padrão)</div>
+                <div className="text-xs opacity-70 mt-1">Dispara a cada 1 hora</div>
+              </div>
+            </label>
+            <label className="flex-1">
+              <input type="radio" name="sniper_auto_enabled" value="false" defaultChecked={!autoConfig.enabled} className="sr-only peer" />
+              <div className="peer-checked:border-rose-500 peer-checked:bg-rose-950/30 peer-checked:text-rose-400 border border-neutral-700 rounded-xl p-4 cursor-pointer text-center transition-all hover:border-neutral-600 text-neutral-400">
+                <div className="text-2xl mb-1">⏸️</div>
+                <div className="font-bold text-sm">Desativado</div>
+                <div className="text-xs opacity-70 mt-1">Não roda a cada hora</div>
+              </div>
+            </label>
+          </div>
+
+          {/* Parâmetros do Sniper Horário */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-neutral-400 mb-1">Capital por Operação Horária (USDT)</label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500 text-sm font-mono">$</span>
+                <input
+                  type="number"
+                  name="sniper_auto_capital"
+                  defaultValue={autoConfig.capital || 15}
+                  min={5}
+                  max={1000}
+                  step={5}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-lg pl-9 pr-4 py-3 text-white font-mono font-bold focus:outline-none focus:border-emerald-500 transition-colors"
+                />
+              </div>
+              <p className="text-[11px] text-neutral-500 mt-1">Mínimo sugerido da Binance para altcoins: $10 a $15 USDT.</p>
+            </div>
+
+            <div>
+              <label className="block text-sm text-neutral-400 mb-1">Frequência da Varredura</label>
+              <div className="w-full bg-neutral-950/60 border border-neutral-800 rounded-lg px-4 py-3 text-neutral-300 font-mono text-sm">
+                A cada 60 minutos (1 Hora)
+              </div>
+              <p className="text-[11px] text-neutral-500 mt-1">Gerenciado automaticamente pelo daemon local de execução.</p>
+            </div>
           </div>
         </section>
 

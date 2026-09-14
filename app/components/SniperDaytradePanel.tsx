@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import DaytradeChart from './DaytradeChart'
 import SniperChatFeed, { ChatMessage } from './SniperChatFeed'
 
@@ -541,127 +542,36 @@ export default function SniperDaytradePanel() {
         </div>
       </div>
 
-      {/* CARD DE CONTROLE: SNIPER AUTÔNOMO A CADA 1 HORA (FLAG DE ATIVAÇÃO / CONFIGURAÇÕES) */}
-      <div className={`p-4 rounded-xl border transition-all mb-4 ${
-        autoConfig.enabled
-          ? 'bg-gradient-to-r from-emerald-950/40 via-neutral-900/90 to-neutral-950 border-emerald-500/40 shadow-[0_0_25px_rgba(16,185,129,0.08)]'
-          : 'bg-gradient-to-r from-neutral-950 via-neutral-900 to-neutral-950 border-neutral-800'
-      }`}>
-        <div className="flex justify-between items-center flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg border ${
-              autoConfig.enabled 
-                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 shadow-sm'
-                : 'bg-neutral-800 text-neutral-400 border-neutral-700'
-            }`}>
-              {autoConfig.enabled ? '⏱️' : '⏸️'}
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-extrabold text-white tracking-wide">
-                  Sniper Autônomo a cada 1 Hora
-                </span>
-                <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold uppercase border ${
-                  autoConfig.enabled
-                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                    : 'bg-neutral-800 text-neutral-400 border-neutral-700'
-                }`}>
-                  {autoConfig.enabled ? 'Sempre Ativo' : 'Desativado pelo Usuário'}
-                </span>
-              </div>
-              <p className="text-xs text-neutral-400 mt-0.5">
-                {autoConfig.enabled ? (
-                  <>
-                    Disparo programado a cada <strong>1 hora (60 min)</strong> com <strong>${autoConfig.capital || 15} {autoConfig.currency || 'USDT'}</strong>.{' '}
-                    <span className="text-emerald-400 font-mono font-bold">
-                      {autoConfig.nextAutoTriggerSeconds && autoConfig.nextAutoTriggerSeconds > 0
-                        ? `Próximo disparo em ~${Math.ceil(autoConfig.nextAutoTriggerSeconds / 60)} min`
-                        : 'Pronto para disparar no próximo ciclo'}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-neutral-500">
-                    O robô está pausado. Para reativar a rotina de 1 hora, clique no botão ao lado.
-                  </span>
-                )}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className="px-3 py-1.5 rounded-lg border border-neutral-700 bg-neutral-800/90 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold flex items-center gap-1.5 transition-colors"
-            >
-              <span>⚙️</span>
-              <span>{isSettingsOpen ? 'Fechar' : 'Configurações'}</span>
-            </button>
-
-            {/* Toggle Switch */}
-            <button
-              type="button"
-              disabled={autoToggling}
-              onClick={() => handleToggleAuto(!autoConfig.enabled)}
-              className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${
-                autoConfig.enabled ? 'bg-emerald-600' : 'bg-neutral-700'
-              }`}
-              title={autoConfig.enabled ? "Clique para desabilitar o modo autônomo" : "Clique para reativar o modo autônomo a cada 1 hora"}
-            >
-              <span
-                className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
-                  autoConfig.enabled ? 'translate-x-8' : 'translate-x-1'
-                }`}
-              />
-            </button>
-          </div>
+      {/* STATUS DO MODO AUTÔNOMO HORÁRIO & LINK PARA CONFIGURAÇÕES */}
+      <div className="flex justify-between items-center flex-wrap gap-2 mb-4 px-4 py-2.5 rounded-xl bg-neutral-950/80 border border-neutral-800 text-xs">
+        <div className="flex items-center gap-2.5">
+          <span className={`w-2.5 h-2.5 rounded-full ${autoConfig.enabled ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)] animate-pulse' : 'bg-neutral-600'}`}></span>
+          <span className="text-neutral-400 font-semibold">Sniper Autônomo (Ciclo 1h):</span>
+          {autoConfig.enabled ? (
+            <span className="text-emerald-400 font-mono font-bold flex items-center gap-1.5">
+              <span>ATIVADO</span>
+              <span className="text-neutral-600">•</span>
+              <span className="text-neutral-300">
+                {autoConfig.nextAutoTriggerSeconds && autoConfig.nextAutoTriggerSeconds > 0
+                  ? `Próximo disparo em ~${Math.ceil(autoConfig.nextAutoTriggerSeconds / 60)} min`
+                  : 'Pronto para o próximo ciclo'} (${autoConfig.capital || 15} USDT)
+              </span>
+            </span>
+          ) : (
+            <span className="text-neutral-500 font-mono">
+              PAUSADO (Desativado nas Configurações)
+            </span>
+          )}
         </div>
 
-        {/* Painel de Configurações Aberto na mesma tela */}
-        {isSettingsOpen && (
-          <div className="mt-4 pt-3 border-t border-neutral-800/80 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-            <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800">
-              <label className="text-neutral-400 font-bold block mb-1">Capital por Disparo Horário:</label>
-              <div className="flex items-center gap-2">
-                <span className="text-neutral-400 font-mono text-sm">$</span>
-                <input
-                  type="number"
-                  min="5"
-                  max="1000"
-                  step="5"
-                  value={autoConfig.capital || 15}
-                  onChange={(e) => {
-                    const newCap = parseFloat(e.target.value) || 15
-                    setAutoConfig(prev => ({ ...prev, capital: newCap }))
-                  }}
-                  className="px-2.5 py-1 bg-neutral-900 border border-neutral-700 rounded-md text-white font-mono font-bold w-20 focus:outline-none focus:border-emerald-500"
-                />
-                <span className="text-neutral-400 font-mono text-xs">USDT</span>
-                <button
-                  type="button"
-                  onClick={() => handleSaveAutoSettings(autoConfig.capital, autoConfig.interval_minutes)}
-                  className="ml-auto px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-md text-xs transition-colors"
-                >
-                  Salvar
-                </button>
-              </div>
-            </div>
-
-            <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800">
-              <label className="text-neutral-400 font-bold block mb-1">Frequência Automática:</label>
-              <span className="text-neutral-200 font-mono font-bold block py-1">
-                A cada 60 minutos (1 Hora)
-              </span>
-            </div>
-
-            <div className="p-2.5 rounded-lg bg-neutral-950/80 border border-neutral-800">
-              <label className="text-neutral-400 font-bold block mb-1">Mercado & Ativo Base:</label>
-              <span className="text-emerald-400 font-mono font-bold block py-1">
-                Pares USDT (Alocação 100% no Ativo #1)
-              </span>
-            </div>
-          </div>
-        )}
+        <Link
+          href="/settings"
+          className="px-3 py-1.5 rounded-lg bg-neutral-900 border border-neutral-700 hover:border-emerald-500 hover:text-white text-neutral-300 flex items-center gap-1.5 transition-colors text-xs font-semibold"
+          title="Clique para ir às Configurações e alterar a flag ou o capital"
+        >
+          <span>⚙️</span>
+          <span>Configurações do Robô</span>
+        </Link>
       </div>
 
       {/* BARRA DE POLÍTICA ADAPTATIVA DA IA & GATEKEEPER MACRO BTC */}

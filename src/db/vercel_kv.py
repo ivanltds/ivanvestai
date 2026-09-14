@@ -112,6 +112,8 @@ class KVDatabase:
             "min_assets": 5,
             "min_stop_pct": 5,
             "max_stop_pct": 25,
+            "auto_deploy_deposits": True,
+            "preferred_reserve": "USDT",
         }
         try:
             import urllib.parse
@@ -223,6 +225,24 @@ class KVDatabase:
             encoded_val = urllib.parse.quote(json.dumps(positions), safe='')
             self._execute_command("set", "portfolio:open_positions", encoded_val)
             print("[DB] Sincronização com a Binance concluída. Preços Médios e Atuais ajustados!")
+
+        # Salva os saldos gerais da conta (BRL em trânsito, USDT e Criptos)
+        if real_balances:
+            import urllib.parse
+            encoded_balances = urllib.parse.quote(json.dumps(real_balances), safe='')
+            self._execute_command("set", "portfolio:account_balances", encoded_balances)
+
+    def get_account_balances(self) -> dict:
+        """Retorna os saldos reais de todas as moedas na conta da Binance"""
+        data = self._execute_command("get", "portfolio:account_balances")
+        if data:
+            try:
+                import urllib.parse
+                decoded = urllib.parse.unquote(data) if isinstance(data, str) else data
+                return json.loads(decoded) if isinstance(decoded, str) else decoded
+            except:
+                return {}
+        return {}
 
     def save_market_sentiment(self, is_bullish: bool, summary: str):
         """Salva o status do 'Fear & Greed' baseado na IA de notícias."""

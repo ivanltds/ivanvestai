@@ -140,11 +140,12 @@ def main():
     
     # 4. Operador (Matemático)
     ag4 = TradeGeneratorAgent()
-    final_orders = ag4.generate_orders(final_trades)
+    final_orders = ag4.generate_orders(final_trades, current_balances=current_balances)
     
     # 5. Auditor (Revisor de Risco Final)
     ag5 = RiskReviewerAgent()
-    final_orders = ag5.review_orders(final_orders)
+    orders_buy_sum = round(sum(o.get('fiat_amount', 0) for o in final_orders if o.get('action') == 'BUY'), 2)
+    final_orders = ag5.review_orders(final_orders, max_budget=max(orders_buy_sum, dca_amount))
     
     if final_orders:
         print("=== INICIANDO EXECUÇÃO (SIMULAÇÃO) ===" if dry_run else "=== INICIANDO EXECUÇÃO (MERCADO REAL) ===")

@@ -32,6 +32,12 @@ Nossa tese combina a estratégia mais sólida e comprovada de acumulação de ca
 ### 4. Evolução Consciente em Fases (Validação Prática Antes da Sofisticação)
 - A complexidade não deve preceder a validação. A camada de IA e sentimento só é acoplada após comprovação em produção da estabilidade e robustez do pipeline de execução pura.
 
+### 5. Fuga da Desvalorização Fiduciária & Dolarização/Criptoacumulação (*Hard Asset Preference*)
+- O Real Brasileiro (BRL) é estritamente uma rampa de entrada (*on-ramp*) para depósitos e aportes periódicos do investidor.
+- Manter capital parado em moeda que se desvaloriza no tempo (BRL) é inaceitável para a preservação de poder de compra.
+- Todo saldo em BRL deve ser ativamente direcionado para a acumulação de criptoativos fortes (BTC, ETH, etc.) ou convertido para Dólar (USDT/USDC).
+- Reservas defensivas e caixas de liquidez devem ser preservados em Dólar ou Cripto, jamais em Reais ociosos.
+
 ---
 
 ## 📈 Fases do Projeto

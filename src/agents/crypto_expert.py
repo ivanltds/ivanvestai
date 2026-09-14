@@ -66,6 +66,7 @@ class CryptoExpertAgent:
             "OPTIMISM": "OP", "CELESTIA": "TIA", "INJECTIVE": "INJ",
             "SUI": "SUI", "PEPE": "PEPE", "FLOKI": "FLOKI",
             "USD COIN": "USDC", "TETHER": "USDT", "TONCOIN": "TON",
+            "USDT": "USDT", "USDC": "USDC", "DOLAR": "USDT", "DÓLAR": "USDT", "DOLLAR": "USDT",
         }
 
         for coin_info in candidates:
@@ -102,6 +103,7 @@ class CryptoExpertAgent:
         1. Avaliar se vale a pena comprar as moedas listadas cruzando as notícias com a matemática.
         2. REGRA DE OURO QUANTITATIVA: Se uma moeda está com RSI Overbought (Sobrecomprado > 70), NÃO APROVE A COMPRA, não importa o quão boa seja a notícia. Você virará liquidez se comprar no topo. Dê preferência para moedas em tendência de alta (is_uptrend = true) ou sub-avaliadas (is_oversold = true).
         3. Retorne um JSON apenas com as moedas aprovadas para compra no formato oficial da Binance. A moeda base para compra deve ser obrigatoriamente '{self.currency}'. Se a análise técnica foi feita em USDT, converta a recomendação final para '{self.currency}' (ex: 'BTC/{self.currency}').
+        4. TESE DE PRESERVAÇÃO CAMBIAL (BRL É APENAS TRANPORTE): O investidor não quer manter patrimônio em Real (BRL), que se desvaloriza. O foco é acumular criptos sólidas e manter reservas em DÓLAR (USDT). Se o cenário de mercado estiver defensivo ou sem altcoins viáveis, indicar compra de 'USDT/{self.currency}' para dolarizar o capital é encorajado.
         
         O JSON deve ser estritamente no formato:
         {{

@@ -16,6 +16,8 @@ const DEFAULTS = {
   min_assets: 5,
   min_stop_pct: 5,
   max_stop_pct: 25,
+  auto_deploy_deposits: true,
+  preferred_reserve: 'USDT',
 }
 
 export default async function SettingsPage() {
@@ -40,6 +42,8 @@ export default async function SettingsPage() {
       min_assets: parseInt(formData.get('min_assets') as string),
       min_stop_pct: parseInt(formData.get('min_stop_pct') as string),
       max_stop_pct: parseInt(formData.get('max_stop_pct') as string),
+      auto_deploy_deposits: formData.get('auto_deploy_deposits') === 'true',
+      preferred_reserve: (formData.get('preferred_reserve') as string) || 'USDT',
     }
     await redis.set('config:bot_settings', JSON.stringify(newConfig))
     revalidatePath('/settings')
@@ -170,6 +174,40 @@ export default async function SettingsPage() {
             </div>
           </div>
           <p className="text-xs text-neutral-600 mt-3">O Stop Loss dinâmico (ATR) é calculado por moeda. Estes limites garantem que nunca fique abaixo de {config.min_stop_pct}% nem acima de {config.max_stop_pct}%.</p>
+        </section>
+
+        {/* POLÍTICA CAMBIAL & ALOCAÇÃO DE APORTES */}
+        <section className="bg-neutral-900/50 rounded-2xl border border-neutral-800 p-6">
+          <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+            <span>💵</span> Política Cambial &amp; Aportes
+          </h2>
+          <p className="text-xs text-neutral-400 mb-4">
+            O Real (BRL) perde poder de compra no tempo e é usado estritamente como rampa de entrada.
+            O patrimônio deve ser mantido em Criptoativos e Dólar (USDT).
+          </p>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-3.5 rounded-xl border border-neutral-800 bg-neutral-950/60">
+              <div>
+                <p className="text-sm font-semibold text-white">Auto-direcionar Aportes em BRL</p>
+                <p className="text-xs text-neutral-400">Ao detectar depósito em Reais, direciona o saldo imediatamente para compra dos ativos (sem deixar BRL ocioso).</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" name="auto_deploy_deposits" value="true" defaultChecked={config.auto_deploy_deposits !== false} className="sr-only peer" />
+                <div className="w-11 h-6 bg-neutral-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
+            <div>
+              <label className="block text-sm text-neutral-400 mb-1">Moeda de Reserva / Hedge Defensivo</label>
+              <select name="preferred_reserve" defaultValue={config.preferred_reserve || 'USDT'}
+                className="w-full bg-neutral-950 border border-neutral-800 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-emerald-500 transition-colors">
+                <option value="USDT">Dólar Tether (USDT) - Moeda Forte de Proteção</option>
+                <option value="USDC">USD Coin (USDC) - Dólar Auditado</option>
+              </select>
+              <p className="text-xs text-neutral-600 mt-1.5">Quando o robô realizar lucros ou proteger caixa, manterá as reservas na moeda escolhida em vez de BRL.</p>
+            </div>
+          </div>
         </section>
 
         <button type="submit"

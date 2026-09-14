@@ -19,17 +19,36 @@ class TradeGeneratorAgent:
         self.total_budget = float(config.get("dca_amount_brl", os.getenv("DCA_AMOUNT_FIAT", "50.00")))
         self.min_order = float(config.get("min_order_brl", 8.0))
         self.max_order = float(config.get("max_order_brl", 200.0))
+        self.auto_deploy_deposits = config.get("auto_deploy_deposits", True)
 
-    def generate_orders(self, final_trades: list) -> list:
+    def generate_orders(self, final_trades: list, current_balances: dict = None) -> list:
         if not final_trades:
             print("[Agente 4] Nenhuma moeda aprovada para operação. Operador ocioso.")
             return []
 
-        print(f"[Agente 4] Operador calculando alocação inteligente (Orçamento disponível: R${self.total_budget:.2f})...")
-
         buy_candidates = [t for t in final_trades if t.get("action", "BUY").upper() == "BUY"]
         sell_orders = [t for t in final_trades if t.get("action", "BUY").upper() == "SELL"]
         orders = []
+
+        # Determina o orçamento efetivo do ciclo considerando saldo real de depósitos em BRL
+        budget = self.total_budget
+        if current_balances and isinstance(current_balances, dict):
+            available_brl = float(current_balances.get("BRL", 0.0))
+            if available_brl < self.min_order and available_brl >= 0:
+                print(f"[Agente 4] Saldo em BRL (R${available_brl:.2f}) abaixo do mínimo da corretora (R${self.min_order:.2f}). Saldo fiduciário já está 100% direcionado para cripto/dólar.")
+                # Retorna apenas ordens de venda se houver
+                for trade in sell_orders:
+                    orders.append({"symbol": trade["symbol"], "action": "SELL", "fiat_amount": 0})
+                return orders
+            elif available_brl >= self.min_order:
+                if self.auto_deploy_deposits and buy_candidates:
+                    max_possible = self.max_order * min(len(buy_candidates), 5)
+                    budget = round(min(available_brl, max(self.total_budget, max_possible)), 2)
+                else:
+                    budget = round(min(self.total_budget, available_brl), 2)
+                print(f"[Agente 4] Aporte em BRL detectado na Binance (R${available_brl:.2f}). Orçamento de alocação: R${budget:.2f}")
+
+        print(f"[Agente 4] Operador calculando alocação inteligente (Orçamento disponível: R${budget:.2f})...")
 
         if buy_candidates:
             # 1. Filtra ativos com confiança muito baixa — não vale arriscar capital
@@ -47,7 +66,7 @@ class TradeGeneratorAgent:
             raw_allocations = {}
             for t in viable:
                 weight = t.get("confidence", 50) / total_confidence
-                raw_allocations[t["symbol"]] = round(self.total_budget * weight, 2)
+                raw_allocations[t["symbol"]] = round(budget * weight, 2)
 
             # 4. Aplica limites: elimina abaixo do mínimo, capa no máximo
             # e redistribui o capital liberado

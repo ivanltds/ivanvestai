@@ -15,13 +15,15 @@ export default async function DashboardPage() {
     sentimentRaw, 
     pnlHistoryRaw, 
     auditLogsRaw, 
-    activeDirective
+    activeDirective,
+    accountBalancesRaw
   ] = await Promise.all([
     redis.get<any>('portfolio:open_positions'),
     redis.get<any>('dashboard:current_sentiment'),
     redis.lrange<any>('dashboard:pnl_history', 0, 10),
     redis.lrange<any>('dashboard:audit_logs', 0, 10),
     redis.get<string>('ai:user_directives'),
+    redis.get<any>('portfolio:account_balances'),
   ])
 
   // Como o Python salva com urllib.parse.quote, precisamos de-codificar o URL (ex: %7B vira {) antes do JSON parse
@@ -37,6 +39,9 @@ export default async function DashboardPage() {
 
   const openPositions = safeParse(openPositionsRaw, {})
   const sentiment = safeParse(sentimentRaw, { is_bullish: true, summary: "Nenhum dado" })
+  const accountBalances = safeParse(accountBalancesRaw, {})
+  const brlBalance = parseFloat(accountBalances.BRL || 0)
+  const usdtBalance = parseFloat(accountBalances.USDT || 0)
   
   // Para arrays vindos do Upstash
   const auditLogs = (auditLogsRaw || []).map((log: any) => safeParse(log, {}))
@@ -72,7 +77,27 @@ export default async function DashboardPage() {
           <h1 className="text-4xl font-extrabold tracking-tight text-white mb-2">Ivanvest<span className="text-emerald-500">AI</span></h1>
           <p className="text-neutral-400">Terminal Quantitativo &amp; Diário de Bordo</p>
         </div>
-        <div className="flex items-end gap-6">
+        <div className="flex items-end gap-6 flex-wrap justify-end">
+          {brlBalance > 0 && (
+            <div className="text-right border-r border-neutral-800 pr-6">
+              <div className="flex items-center justify-end gap-1.5 mb-1">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                <p className="text-xs text-amber-400 font-bold uppercase tracking-wider">Aporte BRL em Trânsito</p>
+              </div>
+              <p className="text-2xl font-bold font-mono text-white">{formatCurrency(brlBalance)}</p>
+              <p className="text-[10px] text-neutral-400">Pronto p/ direcionar a ativos</p>
+            </div>
+          )}
+          {usdtBalance > 0 && (
+            <div className="text-right border-r border-neutral-800 pr-6">
+              <div className="flex items-center justify-end gap-1.5 mb-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <p className="text-xs text-emerald-400 font-bold uppercase tracking-wider">Reserva em Dólar</p>
+              </div>
+              <p className="text-2xl font-bold font-mono text-white">${usdtBalance.toFixed(2)} <span className="text-xs text-neutral-400 font-sans">USDT</span></p>
+              <p className="text-[10px] text-neutral-400">Hedge / Proteção Cambial</p>
+            </div>
+          )}
           <div className="text-right">
             <p className="text-sm text-neutral-500 mb-1">Total Alocado (Histórico)</p>
             <p className="text-3xl font-bold text-white">{formatCurrency(currentPnl)}</p>

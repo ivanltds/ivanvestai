@@ -83,6 +83,13 @@ class PortfolioManagerAgent:
            Lembre-se que a corretora cobra cerca de 0.2% de taxas totais na operação.
            Se a expectativa de lucro imediato (pela análise gráfica + notícias) não for claramente e folgadamente superior a essa margem de custo, REJEITE a operação.
            É preferível não operar do que perder dinheiro com taxas em mercados laterais.
+        REGRA 5 (PROTEÇÃO CAMBIAL & ALOCAÇÃO ATIVA DE APORTES - BRL É APENAS TRANPORTE):
+           O Real Brasileiro (BRL) é estritamente uma moeda de entrada (on-ramp) para aportes mensais do investidor. 
+           Manter capital parado em moeda que desvaloriza (BRL) é inaceitável. O patrimônio deve ser mantido em CRIPTOATIVOS FORTES (BTC, ETH, etc.) ou em DÓLAR (USDT).
+           - Quando houver saldo em BRL disponível vindo de depósitos/aportes (ver Balanços Atuais):
+             DIRECIONE-O ATIVAMENTE para a acumulação dos ativos cripto recomendados pelo comitê.
+           - Se o mercado estiver em momento de cautela ou indefinição e exigir reserva de valor, prefira converter o BRL para DÓLAR (USDT/BRL) para preservar o poder de compra.
+           - Em operações de venda (Stop Loss ou Take Profit), a reserva líquida deve ser mantida preferencialmente em DÓLAR (USDT) ou reinvestida em outros ativos, NUNCA mantida como BRL ocioso.
         
         DADOS DE ENTRADA:
         1. Balanços Atuais na Binance: {json.dumps(current_balances)}

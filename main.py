@@ -51,12 +51,18 @@ def execute_order(order, exchange):
                 exchange.create_market_buy_order(symbol, crypto_qty)
             kv_db.register_buy(symbol, crypto_qty, fiat_amount)
             
+            base_asset = symbol.split('/')[0] if '/' in symbol else symbol
+            quote_asset = symbol.split('/')[1] if '/' in symbol else "BRL"
+            
             return {
                 "symbol": symbol,
                 "action": "BUY",
                 "price": price,
                 "crypto_qty": crypto_qty,
                 "fiat_amount": fiat_amount,
+                "from_asset": quote_asset,
+                "to_asset": base_asset,
+                "pair_flow": f"{quote_asset} -> {base_asset}",
                 "dry_run": is_dry_run
             }
             
@@ -72,12 +78,18 @@ def execute_order(order, exchange):
                     exchange.create_market_sell_order(symbol, crypto_qty)
                 kv_db.register_sell(symbol)
                 
+                base_asset = symbol.split('/')[0] if '/' in symbol else symbol
+                quote_asset = symbol.split('/')[1] if '/' in symbol else "BRL"
+
                 return {
                     "symbol": symbol,
                     "action": "SELL",
                     "price": price,
                     "crypto_qty": crypto_qty,
                     "fiat_amount": crypto_qty * price,
+                    "from_asset": base_asset,
+                    "to_asset": quote_asset,
+                    "pair_flow": f"{base_asset} -> {quote_asset}",
                     "dry_run": is_dry_run
                 }
             else:

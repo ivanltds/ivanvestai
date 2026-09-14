@@ -113,17 +113,23 @@ export default async function DashboardPage() {
                 
                 // Setas indicando se subiu ou caiu desde a última execução
                 const wentUp = currentPrice >= lastPrice;
+                const [posCoin, posQuote] = symbol.includes('/') ? symbol.split('/') : [symbol, 'BRL'];
 
                 return (
                   <div key={symbol} className="flex justify-between items-center p-3 rounded-lg bg-neutral-900 border border-neutral-800/50">
                     <div>
-                      <p className="font-bold text-white flex items-center gap-2">
-                        {symbol} 
-                        <span className="text-xs" title={wentUp ? "Subiu desde a última execução" : "Caiu desde a última execução"}>
-                          {wentUp ? '🟢 ⬆️' : '🔴 ⬇️'}
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-white flex items-center gap-1.5">
+                          {posCoin} 
+                          <span className="text-xs" title={wentUp ? "Subiu desde a última execução" : "Caiu desde a última execução"}>
+                            {wentUp ? '🟢 ⬆️' : '🔴 ⬇️'}
+                          </span>
+                        </p>
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-800/80 border border-neutral-700/50 text-neutral-400">
+                          {posQuote} ➔ {posCoin}
                         </span>
-                      </p>
-                      <p className="text-xs text-neutral-500">{data.total_coins.toFixed(6)} moedas</p>
+                      </div>
+                      <p className="text-xs text-neutral-500 mt-0.5">{data.total_coins.toFixed(6)} moedas</p>
                     </div>
                     <div className="text-right">
                       <p className={`font-mono text-sm ${isProfiting ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -261,26 +267,42 @@ export default async function DashboardPage() {
                 <p className="text-neutral-500 italic">Nenhum log de execução encontrado.</p>
               )}
               {auditLogs.map((log: any, idx: number) => {
-                // O objeto já foi parseado pelo safeParse no início do arquivo
                 const entry = log
                 const date = new Date(entry.timestamp * 1000).toLocaleString('pt-BR')
+                // Distinção explícita: apenas dry_run === true é simulação
+                const isSimulation = entry.dry_run === true
+                const isLive      = entry.dry_run === false
                 
                 return (
-                  <div key={idx} className={`p-4 rounded-xl border relative pl-6 ${entry.dry_run ? 'border-amber-900/40 bg-amber-950/10' : 'border-neutral-800/50 bg-neutral-950/50'}`}>
+                  <div key={idx} className={`p-4 rounded-xl border relative pl-6 transition-all ${
+                    isSimulation
+                      ? 'border-amber-800/50 bg-amber-950/10'
+                      : isLive
+                        ? 'border-emerald-800/40 bg-emerald-950/10'
+                        : 'border-neutral-800/50 bg-neutral-950/50'
+                  }`}>
                     {/* Linha da timeline */}
                     <div className="absolute left-[11px] top-8 bottom-[-16px] w-[2px] bg-neutral-800 z-0"></div>
-                    <div className={`absolute left-2 top-4 w-3 h-3 rounded-full border-[3px] border-neutral-950 z-10 ${entry.dry_run ? 'bg-amber-500' : 'bg-emerald-500'}`}></div>
+                    <div className={`absolute left-2 top-4 w-3 h-3 rounded-full border-[3px] border-neutral-950 z-10 ${
+                      isSimulation ? 'bg-amber-400' : isLive ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]' : 'bg-neutral-600'
+                    }`}></div>
                     
                     <div className="flex items-center gap-2 mb-2">
                       <p className="text-xs text-neutral-500 font-mono">{date}</p>
-                      {entry.dry_run && (
-                        <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-bold rounded border border-amber-500/30 tracking-wider">
-                          SIM
+                      {isSimulation && (
+                        <span className="px-2 py-0.5 bg-amber-500/20 text-amber-400 text-[10px] font-bold rounded-full border border-amber-500/40 tracking-widest">
+                          🧪 SIMULAÇÃO
+                        </span>
+                      )}
+                      {isLive && (
+                        <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 text-[10px] font-bold rounded-full border border-emerald-500/40 tracking-widest animate-pulse">
+                          ⚡ REAL
                         </span>
                       )}
                     </div>
                     <p className="text-sm text-neutral-300 mb-3">{entry.news_summary}</p>
                     
+
                     {entry.news_sources && entry.news_sources.length > 0 && (
                       <details className="mb-3 group bg-neutral-900/50 border border-neutral-800 rounded text-xs text-neutral-400">
                         <summary className="p-2 cursor-pointer font-bold text-neutral-300 hover:text-white transition-colors focus:outline-none">
@@ -320,30 +342,83 @@ export default async function DashboardPage() {
                     
                     {entry.trades && entry.trades.length > 0 ? (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                        {entry.trades.map((t: any, i: number) => (
-                          <div key={i} className={`p-3 rounded-lg border ${
-                            t.action === 'SELL' ? 'bg-rose-950/30 border-rose-900/50' : 'bg-emerald-950/30 border-emerald-900/50'
-                          }`}>
-                            <div className="flex justify-between items-center mb-2">
-                              <span className={`px-2 py-1 text-[10px] font-bold rounded uppercase tracking-wider ${
-                                t.action === 'SELL' ? 'bg-rose-500/20 text-rose-400' : 'bg-emerald-500/20 text-emerald-400'
-                              }`}>
-                                {t.action || 'BUY'}
-                              </span>
-                              <span className="font-bold text-white text-sm">{t.symbol}</span>
+                        {entry.trades.map((t: any, i: number) => {
+                          const isBuy = (t.action || 'BUY').toUpperCase() === 'BUY'
+                          const parts = (t.symbol || '').split('/')
+                          const baseAsset = parts[0] || t.symbol || 'CRYPTO'
+                          const quoteAsset = parts[1] || 'BRL'
+                          
+                          const fromAsset = t.from_asset || (isBuy ? quoteAsset : baseAsset)
+                          const toAsset = t.to_asset || (isBuy ? baseAsset : quoteAsset)
+
+                          return (
+                            <div key={i} className={`p-3.5 rounded-xl border relative overflow-hidden transition-all ${
+                              !isBuy 
+                                ? 'bg-rose-950/20 border-rose-900/40 hover:border-rose-800/60' 
+                                : 'bg-emerald-950/20 border-emerald-900/40 hover:border-emerald-800/60'
+                            }`}>
+                              {/* Header: Badge de Ação e Fluxo da Operação (ex: BRL ➔ BTC) */}
+                              <div className="flex justify-between items-center mb-3">
+                                <div className="flex items-center gap-2">
+                                  <span className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase tracking-wider ${
+                                    !isBuy 
+                                      ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' 
+                                      : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                  }`}>
+                                    {isBuy ? 'COMPRA' : 'VENDA'}
+                                  </span>
+
+                                  {/* Fluxo de Conversão em destaque: O que foi usado -> O que foi comprado */}
+                                  <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-neutral-900/90 border border-neutral-800 font-mono text-xs font-bold shadow-sm">
+                                    <span className={isBuy ? 'text-amber-400' : 'text-purple-400'}>{fromAsset}</span>
+                                    <span className="text-neutral-500 text-xs">➔</span>
+                                    <span className={isBuy ? 'text-emerald-400' : 'text-amber-400'}>{toAsset}</span>
+                                  </div>
+                                </div>
+
+                                <span className="font-mono text-xs text-neutral-400 font-semibold">{t.symbol}</span>
+                              </div>
+
+                              {/* Detalhamento: O que foi usado (pago) vs O que foi adquirido */}
+                              <div className="grid grid-cols-2 gap-2 text-xs mb-2.5 p-2.5 rounded-lg bg-neutral-950/70 border border-neutral-800/60">
+                                <div>
+                                  <span className="text-[10px] text-neutral-500 uppercase block font-semibold mb-0.5">
+                                    {isBuy ? 'Usado (Pago)' : 'Entregue (Venda)'}
+                                  </span>
+                                  <span className="font-mono font-bold text-white text-xs block">
+                                    {isBuy 
+                                      ? (t.fiat_amount ? formatCurrency(t.fiat_amount) : '-') 
+                                      : (t.crypto_qty ? `${t.crypto_qty.toFixed(6)} ${baseAsset}` : '-')}
+                                  </span>
+                                  <span className="text-[10px] text-neutral-500 font-mono">
+                                    {isBuy ? quoteAsset : baseAsset}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-[10px] text-neutral-500 uppercase block font-semibold mb-0.5">
+                                    {isBuy ? 'Comprado (Recebido)' : 'Recebido (Fiat)'}
+                                  </span>
+                                  <span className="font-mono font-bold text-emerald-400 text-xs block">
+                                    {isBuy 
+                                      ? (t.crypto_qty ? `${t.crypto_qty.toFixed(6)} ${baseAsset}` : '-') 
+                                      : (t.fiat_amount ? formatCurrency(t.fiat_amount) : '-')}
+                                  </span>
+                                  <span className="text-[10px] text-neutral-500 font-mono">
+                                    {isBuy ? baseAsset : quoteAsset}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Rodapé: Preço de Referência */}
+                              <div className="flex justify-between items-center text-[11px] text-neutral-400 pt-1.5 border-t border-neutral-800/40">
+                                <span className="text-neutral-500">Preço de Referência:</span>
+                                <span className="font-mono text-neutral-300 font-medium">
+                                  {t.price ? `${formatCurrency(t.price)} / ${baseAsset}` : '-'}
+                                </span>
+                              </div>
                             </div>
-                            <div className="flex justify-between text-xs text-neutral-400">
-                              <span>Qtd: <strong className="text-neutral-200">{t.crypto_qty ? t.crypto_qty.toFixed(6) : '-'}</strong></span>
-                              <span>Ref: <strong className="text-neutral-200">{t.price ? formatCurrency(t.price) : '-'}</strong></span>
-                            </div>
-                            <div className="mt-2 pt-2 border-t border-neutral-800/50 flex justify-between items-center">
-                              <span className="text-[10px] text-neutral-500 uppercase">Volume Fiat</span>
-                              <span className="font-mono text-sm font-bold text-white">
-                                {t.fiat_amount ? formatCurrency(t.fiat_amount) : '-'}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     ) : (
                       <span className="px-2 py-1 text-xs bg-neutral-800 text-neutral-400 rounded inline-block mt-3">

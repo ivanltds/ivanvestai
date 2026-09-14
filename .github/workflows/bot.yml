@@ -1,0 +1,37 @@
+name: IvanvestAI Bot CRON
+
+on:
+  schedule:
+    # Roda no minuto 0 de toda hora (de hora em hora)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Permite rodar manualmente clicando num botão no GitHub
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Clonar o Repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          
+      - name: Instalar Dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Executar o IvanvestAI (Main Pipeline)
+        env:
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+          DRY_RUN: 'True' # Mude para 'False' no seu Vercel/GitHub quando quiser operar dinheiro real
+        run: |
+          python main.py

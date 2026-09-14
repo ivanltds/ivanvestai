@@ -65,11 +65,13 @@ class SniperTraderAgent:
             print(f"[Sniper] Erro ao obter dados de 1m para {symbol}: {e}")
             return {}
 
-    def run_session(self) -> dict:
+    def run_session(self, duration_minutes: int = 10) -> dict:
         """Executa a sessão completa de 10 minutos (+ até 2m se em loss)."""
-        session_info = kv_db.get_daytrade_session()
+        self.session_duration_sec = duration_minutes * 60
+        session_info = kv_db.get_daytrade_session() or {}
         started_at = time.time()
-        session_info["started_at"] = started_at
+        from datetime import datetime, timezone
+        session_info["started_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         session_info["status"] = "running"
         session_info["in_grace_period"] = False
         kv_db.start_daytrade_session(session_info)

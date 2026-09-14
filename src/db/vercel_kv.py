@@ -415,9 +415,10 @@ class KVDatabase:
     def finish_daytrade_session(self, summary: dict):
         """Finaliza a sessão, salva no Diário de Bordo oficial e desliga o botão."""
         import time, urllib.parse
-        session = self.get_daytrade_session()
-        session["status"] = "completed"
-        session["finished_at"] = time.time()
+        from datetime import datetime, timezone
+        session = self.get_daytrade_session() or {}
+        session["status"] = summary.get("status", "completed")
+        session["finished_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         session["summary"] = summary
         encoded = urllib.parse.quote(json.dumps(session), safe='')
         self._execute_command("set", "daytrade:session", encoded)

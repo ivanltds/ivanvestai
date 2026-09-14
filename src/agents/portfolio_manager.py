@@ -93,6 +93,12 @@ class PortfolioManagerAgent:
              DIRECIONE-O ATIVAMENTE para a acumulação dos ativos cripto recomendados pelo comitê.
            - Se o mercado estiver em momento de cautela ou indefinição e exigir reserva de valor, prefira converter o BRL para DÓLAR (USDT/BRL) para preservar o poder de compra.
            - Em operações de venda (Stop Loss ou Take Profit), a reserva líquida deve ser mantida preferencialmente em DÓLAR (USDT) ou reinvestida em outros ativos, NUNCA mantida como BRL ocioso.
+        REGRA 6 (REBALANCEAMENTO ATIVO & ROTATIVIDADE DE MEMECOINS):
+            Memecoins (PEPE, FLOKI, DOGE, SHIB, etc.) são ativos táticos de altíssimo risco e NÃO reservas de valor.
+            - Se as LIÇÕES APRENDIDAS recomendarem redução ou apontarem fraqueza/estagnação (ex: "ativo PEPE não está apresentando valorização", "FLOKI estagnado"), ou se o comitê estiver buscando acumular ativos fortes (BTC/ETH):
+              -> EMITA AÇÃO DE 'SELL' PARA ESSAS MEMECOINS (preferencialmente par /USDT).
+              -> A rotação de capital saindo de memecoins estagnadas para Bitcoin (BTC) ou Dólar (USDT) é a prioridade do fundo.
+            - Se o total de memecoins ultrapassar {self.max_memecoin_pct}% da carteira, liquide o excesso imediatamente emitindo 'SELL'.
         
         DADOS DE ENTRADA:
         1. Balanços Atuais na Binance: {json.dumps(current_balances)}
@@ -124,6 +130,25 @@ class PortfolioManagerAgent:
         except json.JSONDecodeError:
             print("[Agente 3] Erro: IA falhou na gestão de risco. Bloqueando operações.")
             final_trades = []
+
+        # REBALANCEAMENTO ATIVO DE MEMECOINS:
+        # Se as lições aprendidas apontarem estagnação/redução de memecoins que temos em carteira,
+        # ou se o usuário ativou rebalanceamento de memecoins, força ordem de SELL para rotacionar capital.
+        memecoin_tickers = ["PEPE", "FLOKI", "DOGE", "SHIB", "BONK", "WIF"]
+        learned_lower = learned_lessons.lower() if learned_lessons else ""
+        for pos_symbol in open_positions_memory.keys():
+            base = pos_symbol.split('/')[0].upper()
+            if base in memecoin_tickers:
+                is_flagged = any(w in learned_lower for w in ["reduzir", "vender", "estagnad", "desvaloriza", "cortar", "sair"]) and base.lower() in learned_lower
+                dir_rebalance = user_directives and any(w in user_directives.lower() for w in ["rebalance", "memecoin", "venda pepe", "venda floki", "vender memecoin"])
+                if is_flagged or dir_rebalance:
+                    if not any(t.get("symbol", "").split("/")[0] == base and t.get("action") == "SELL" for t in final_trades):
+                        print(f"[Agente 3] [REBALANCEAMENTO DE MEMECOINS] Emitindo ordem de VENDA para {base} (rotacionando para BTC/USDT).")
+                        final_trades.append({
+                            "symbol": f"{base}/USDT",
+                            "action": "SELL",
+                            "is_memecoin": True
+                        })
 
         # Garantia absoluta: Se o humano definiu uma diretriz explícita de compra,
         # o Gestor de Portfólio não pode descartar o ativo solicitado!

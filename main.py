@@ -31,18 +31,28 @@ def get_binance_balances():
         return {}
 
 def execute_order(order, exchange):
-    """Executa a ordem a mercado com tratamento de erro de Símbolo"""
+    """Executa a ordem a mercado com tratamento de erro de Símbolo e roteamento inteligente de par"""
     symbol = order['symbol']
     action = order.get('action', 'BUY').upper()
     fiat_amount = order.get('fiat_amount', 0)
     
     try:
+        base_asset = symbol.split('/')[0] if '/' in symbol else symbol
+        quote_asset = symbol.split('/')[1] if '/' in symbol else "BRL"
+
+        # Garante que o par correto existe na Binance (ex: FLOKI/BRL não existe, mas FLOKI/USDT existe)
+        markets = exchange.load_markets()
+        if symbol not in markets:
+            if f"{base_asset}/USDT" in markets:
+                symbol = f"{base_asset}/USDT"
+                quote_asset = "USDT"
+            elif f"{base_asset}/BRL" in markets:
+                symbol = f"{base_asset}/BRL"
+                quote_asset = "BRL"
+
         # Busca o preço atual para calcular quantidade de crypto
         ticker = exchange.fetch_ticker(symbol)
         price = ticker['last']
-        
-        base_asset = symbol.split('/')[0] if '/' in symbol else symbol
-        quote_asset = symbol.split('/')[1] if '/' in symbol else "BRL"
         
         if action == 'BUY':
             raw_qty = fiat_amount / price
@@ -76,36 +86,59 @@ def execute_order(order, exchange):
             
         elif action == 'SELL':
             positions = kv_db.get_open_positions()
-            if symbol in positions:
-                crypto_qty = positions[symbol]['total_coins']
-                is_dry_run = order.get('dry_run', True)
-                if is_dry_run:
-                    print(f"[DRY_RUN] SIMULADO: VENDA de {crypto_qty:.6f} {symbol} (Stop Loss/DCA)")
-                else:
-                    print(f"[LIVE] EXECUTANDO: VENDA de {crypto_qty:.6f} {symbol}")
-                    exchange.create_market_sell_order(symbol, crypto_qty)
-                kv_db.register_sell(symbol)
-                
-                base_asset = symbol.split('/')[0] if '/' in symbol else symbol
-                quote_asset = symbol.split('/')[1] if '/' in symbol else "BRL"
+            # Encontra a posição por correspondência exata ou por base_asset
+            matching_key = symbol if symbol in positions else next((k for k in positions if k.split('/')[0] == base_asset), None)
+            
+            # Busca saldo livre real na Binance
+            try:
+                bal = exchange.fetch_balance()
+                free_asset_qty = float(bal.get('free', {}).get(base_asset, 0.0))
+            except Exception as e:
+                print(f"[AVISO] Falha ao consultar saldo da Binance para {base_asset}: {e}")
+                free_asset_qty = 0.0
 
-                return {
-                    "symbol": symbol,
-                    "action": "SELL",
-                    "price": price,
-                    "crypto_qty": crypto_qty,
-                    "fiat_amount": crypto_qty * price,
-                    "from_asset": base_asset,
-                    "to_asset": quote_asset,
-                    "pair_flow": f"{base_asset} -> {quote_asset}",
-                    "dry_run": is_dry_run
-                }
+            if matching_key and matching_key in positions:
+                recorded_qty = positions[matching_key].get('total_coins', 0.0)
+                target_qty = min(recorded_qty, free_asset_qty) if free_asset_qty > 0 else recorded_qty
             else:
-                print(f"[ERRO DE LÓGICA] IA tentou vender {symbol} mas não temos histórico na memória.")
+                # Se não estiver no Redis, mas houver saldo livre real na Binance, PERMITE A VENDA!
+                target_qty = free_asset_qty
+                matching_key = symbol
+
+            try:
+                crypto_qty = float(exchange.amount_to_precision(symbol, target_qty))
+            except:
+                crypto_qty = target_qty
+
+            if crypto_qty <= 0:
+                print(f"[VENDA DESCARTADA] Saldo livre insuficiente de {base_asset} ({free_asset_qty}) para vender na Binance.")
                 return None
+
+            is_dry_run = order.get('dry_run', True)
+            if is_dry_run:
+                print(f"[DRY_RUN] SIMULADO: VENDA de {crypto_qty} {symbol} (Rebalanceamento/Stop)")
+            else:
+                print(f"[LIVE] EXECUTANDO: VENDA de {crypto_qty} {symbol} (Rebalanceamento/Stop)")
+                exchange.create_market_sell_order(symbol, crypto_qty)
+                
+            if matching_key and matching_key in positions:
+                kv_db.register_sell(matching_key)
+
+            return {
+                "symbol": symbol,
+                "action": "SELL",
+                "price": price,
+                "crypto_qty": crypto_qty,
+                "fiat_amount": round(crypto_qty * price, 2),
+                "from_asset": base_asset,
+                "to_asset": quote_asset,
+                "pair_flow": f"{base_asset} -> {quote_asset}",
+                "dry_run": is_dry_run
+            }
+
             
     except ccxt.BadSymbol:
-        print(f"[ERRO DE MERCADO] A moeda {symbol} não existe ou não tem par com BRL na Binance. Ordem descartada.")
+        print(f"[ERRO DE MERCADO] A moeda {symbol} não existe ou não tem par negociável na Binance. Ordem descartada.")
         return None
     except Exception as e:
         print(f"[ERRO DE EXECUÇÃO] Falha ao executar {symbol}: {e}")
@@ -164,21 +197,43 @@ def main():
         })
         
         executed_trades = []
-        for order in final_orders:
+        # Executa ordens de VENDA primeiro para liberar caixa/liquidez antes de executar COMPRAS
+        sorted_orders = sorted(final_orders, key=lambda x: 0 if x.get('action') == 'SELL' else 1)
+        for order in sorted_orders:
             # Injeta o modo dry_run em cada ordem
             order['dry_run'] = dry_run
             res = execute_order(order, exchange)
             if res: executed_trades.append(res)
+
+        # Se ordens de venda foram executadas e liberaram caixa, rotaciona imediatamente para compra no mesmo ciclo
+        had_sells = any(t.get('action') == 'SELL' for t in executed_trades)
+        had_buys = any(t.get('action') == 'BUY' for t in executed_trades)
+        if had_sells and not had_buys:
+            fresh_balances = get_binance_balances()
+            fresh_usdt = float(fresh_balances.get("USDT", 0.0))
+            fresh_brl = float(fresh_balances.get("BRL", 0.0))
+            if fresh_usdt >= 5.0 or fresh_brl >= min_order:
+                print(f"[REBALANCEAMENTO ATIVO] Caixa liberado pelas vendas: ${fresh_usdt:.2f} USDT | R${fresh_brl:.2f} BRL. Gerando compra de rotação imediata...")
+                rotation_orders = ag4.generate_orders(final_trades, current_balances=fresh_balances)
+                rotation_orders = [o for o in rotation_orders if o.get('action') == 'BUY']
+                rotation_orders = ag5.review_orders(rotation_orders, max_budget=max_order)
+                for order in rotation_orders:
+                    order['dry_run'] = dry_run
+                    r = execute_order(order, exchange)
+                    if r: executed_trades.append(r)
             
-        # Calcula e salva PNL (Simplificado: só soma os totais investidos para a curva de equity, num caso real somaria os balanços reais convertidos em fiat)
+        # Calcula e salva PNL
         total_pnl = sum([v['total_invested'] for v in kv_db.get_open_positions().values()])
         kv_db.save_portfolio_value(total_pnl)
+
     else:
         executed_trades = []
         print("Comitê decidiu NÃO operar nesta hora.")
         
-    # 0. Finaliza o ciclo salvando o log no Dashboard
-    ag0.commit_cycle(news_insights, executed_trades, current_balances, learned_lessons, dry_run)
+    # 0. Finaliza o ciclo salvando o log no Dashboard com os saldos atualizados pós-execução
+    latest_balances = get_binance_balances()
+    ag0.commit_cycle(news_insights, executed_trades, latest_balances, learned_lessons, dry_run)
+
     
     print("=== CICLO CONCLUÍDO COM SUCESSO ===")
 

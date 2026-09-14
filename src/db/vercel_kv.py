@@ -207,15 +207,21 @@ class KVDatabase:
                 synced = True
 
             base_coin = symbol.split('/')[0] if '/' in symbol else symbol
-            if base_coin in real_balances and real_balances[base_coin] > 0.00001:
-                real_qty = real_balances[base_coin]
-                if positions[symbol].get('total_coins', 0) != real_qty:
-                    positions[symbol]['total_coins'] = real_qty
-                    positions[symbol]['avg_price'] = positions[symbol].get('total_invested', 0) / real_qty
-                    synced = True
-            elif base_coin not in real_balances:
+            coin_qty = float(real_balances.get(base_coin, 0.0))
+            current_p = positions[symbol].get('current_price', 0.0)
+            val_brl = coin_qty * current_p
+            
+            # Se a posição foi liquidada ou restar apenas poeira (< R$ 2,00), remove da carteira
+            if coin_qty <= 0.00001 or (val_brl > 0 and val_brl < 2.0):
                 del positions[symbol]
                 synced = True
+            else:
+                if positions[symbol].get('total_coins', 0) != coin_qty:
+                    positions[symbol]['total_coins'] = coin_qty
+                    if coin_qty > 0:
+                        positions[symbol]['avg_price'] = positions[symbol].get('total_invested', 0) / coin_qty
+                    synced = True
+
         
         # 2. Detecta moedas com saldo real na Binance que ainda não estão registradas em posições
         try:

@@ -61,7 +61,11 @@ class TradeGeneratorAgent:
                 
                 # Converte orçamento configurado para USDT (ex: R$50 -> ~9.62 USDT)
                 budget_in_usdt = round(self.total_budget / 5.2, 2)
-                budget = round(min(available_usdt, max(budget_in_usdt, 5.0)), 2)
+                if self.auto_deploy_deposits:
+                    # Se auto_deploy_deposits estiver ativo, aloca a reserva disponível até o teto máximo permitido
+                    budget = round(min(available_usdt, max_order_cost), 2)
+                else:
+                    budget = round(min(available_usdt, max(budget_in_usdt, 5.0)), 2)
                 print(f"[Agente 4] BRL esgotado (R${available_brl:.2f}), mas detectada Reserva em Dólar (${available_usdt:.2f} USDT). Ativando compras via par /USDT (Orçamento: ${budget:.2f} USDT)")
 
             else:

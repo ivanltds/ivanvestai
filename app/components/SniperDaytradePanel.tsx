@@ -88,16 +88,34 @@ export default function SniperDaytradePanel() {
     return () => clearInterval(interval)
   }, [fetchDaytradeState])
 
+  // Função auxiliar para converter qualquer formato de timestamp (segundos, ms ou ISO)
+  const parseStartedAtMs = (raw: any): number => {
+    if (!raw) return 0
+    if (typeof raw === 'number') {
+      return raw < 1e11 ? raw * 1000 : raw
+    }
+    if (typeof raw === 'string') {
+      const num = Number(raw)
+      if (!isNaN(num) && raw.trim() !== '') {
+        return num < 1e11 ? num * 1000 : num
+      }
+      return new Date(raw).getTime()
+    }
+    return 0
+  }
+
   // Cronômetro regressivo de precisão do Day Trade (ativo APENAS após started_at)
   useEffect(() => {
     if (!session || session.status !== 'running' || !session.started_at) {
       return
     }
 
-    const timer = setInterval(() => {
-      const startedAtMs = new Date(session.started_at!).getTime()
+    const startedAtMs = parseStartedAtMs(session.started_at)
+    if (!startedAtMs || isNaN(startedAtMs)) return
+
+    const updateTimer = () => {
       const nowMs = Date.now()
-      const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000)
+      const elapsedSeconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000))
 
       if (elapsedSeconds < 600) {
         setRemainingSessionSeconds(600 - elapsedSeconds)
@@ -114,8 +132,10 @@ export default function SniperDaytradePanel() {
         setGraceSeconds(0)
         setInGracePeriod(false)
       }
-    }, 1000)
+    }
 
+    updateTimer()
+    const timer = setInterval(updateTimer, 1000)
     return () => clearInterval(timer)
   }, [session])
 

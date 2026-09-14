@@ -357,9 +357,11 @@ class KVDatabase:
 
     def start_daytrade_session(self, session_data: dict) -> dict:
         """Inicia oficialmente a contagem regressiva da sessão Sniper pelo backend."""
-        import time, urllib.parse
+        import urllib.parse
+        from datetime import datetime, timezone
         session_data["status"] = "running"
-        session_data["started_at"] = time.time()
+        if not session_data.get("started_at") or isinstance(session_data.get("started_at"), (int, float)):
+            session_data["started_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         encoded = urllib.parse.quote(json.dumps(session_data), safe='')
         self._execute_command("set", "daytrade:session", encoded)
         return session_data

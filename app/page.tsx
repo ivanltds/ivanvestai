@@ -61,6 +61,14 @@ export default async function DashboardPage() {
 
   // Formatações
   const formatCurrency = (val: number) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val)
+  const formatDateTime = (val: any) => {
+    if (!val) return ''
+    const num = Number(val)
+    if (!isNaN(num) && num > 0) {
+      return new Date(num < 1e11 ? num * 1000 : num).toLocaleString('pt-BR')
+    }
+    return new Date(val).toLocaleString('pt-BR')
+  }
   
   // Action para injetar diretriz
   async function submitDirective(formData: FormData) {
@@ -318,7 +326,7 @@ export default async function DashboardPage() {
                   <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
                     <div className="flex items-center gap-2">
                       <p className="text-xs text-neutral-400 font-mono">
-                        {new Date(daytradeSession.started_at).toLocaleString('pt-BR')}
+                        {formatDateTime(daytradeSession.started_at)}
                       </p>
                       <span className="px-2.5 py-0.5 bg-rose-500/20 text-rose-300 text-[10px] font-extrabold rounded-full border border-rose-500/40 uppercase tracking-wider">
                         ⚡ SNIPER DAY TRADE (10 MIN)
@@ -345,7 +353,7 @@ export default async function DashboardPage() {
                   <p className="text-sm text-neutral-200 mb-2">
                     {daytradeSession.status === 'running'
                       ? `Sessão ativa operando ${daytradeSession.symbol}. Monitorando Bandas de Bollinger, RSI-7 e VWAP.`
-                      : `Sessão concluída em ${daytradeSession.finished_at ? new Date(daytradeSession.finished_at).toLocaleTimeString('pt-BR') : '10 min'}. ${daytradeSession.reason || ''}`}
+                      : `Sessão concluída em ${daytradeSession.finished_at ? formatDateTime(daytradeSession.finished_at) : '10 min'}. ${daytradeSession.reason || ''}`}
                   </p>
 
                   {/* TABELA DETALHADA DAS OPERAÇÕES DO DAY TRADE */}

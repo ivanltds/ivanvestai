@@ -12,7 +12,7 @@ class SniperTraderAgent:
     Executa micro-operações de scalping em velas de 1m, grava snapshots a cada 30s
     e possui tolerância inteligente de até 2m para posições em loss.
     """
-    def __init__(self, capital: float = 10.0, currency: str = "USDT", dry_run: bool = False):
+    def __init__(self, capital: float = 10.0, currency: str = "USDT", symbol: str = None, dry_run: bool = False):
         self.capital = float(capital)
         self.currency = currency.upper()
         self.dry_run = dry_run
@@ -21,7 +21,10 @@ class SniperTraderAgent:
             'secret': settings.SECRET_KEY,
             'enableRateLimit': True,
         })
-        self.symbol = f"BTC/{self.currency}" if self.currency in ["USDT", "BRL"] else "BTC/USDT"
+        if symbol:
+            self.symbol = symbol
+        else:
+            self.symbol = f"BTC/{self.currency}" if self.currency in ["USDT", "BRL"] else "BTC/USDT"
         self.session_duration_sec = 600   # 10 minutos
         self.grace_period_sec = 120       # +2 minutos de tolerância se estiver em loss
         self.snapshot_interval_sec = 30   # Snapshot a cada 30s

@@ -24,6 +24,7 @@ import PortfolioPieChart from './components/PortfolioPieChart'
 import DailyTradingSummaryCard from './components/DailyTradingSummaryCard'
 import CurrentDaytradeSession from './components/CurrentDaytradeSession'
 import FloatingCommandRoom from './components/FloatingCommandRoom'
+import Tooltip from './components/Tooltip'
 
 const redis = new Redis({
   url: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '',
@@ -101,12 +102,16 @@ export default async function DashboardPage() {
             <div className="text-right border-r border-neutral-800 pr-6">
               <div className="flex items-center justify-end gap-1.5 mb-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-neutral-500"></span>
-                <p className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono">
-                  Saldo BRL
+                <p className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono flex items-center gap-1">
+                  Saldo em Reais
+                  <Tooltip
+                    position="bottom"
+                    text="Valor disponível em Reais (BRL) na sua conta da corretora. Este dinheiro pode ser usado para comprar criptomoedas."
+                  />
                 </p>
               </div>
               <p className="text-xl font-bold font-mono text-white">{formatCurrency(brlBalance)}</p>
-              <p className="text-[10px] text-neutral-500">Alocação disponível em Reais</p>
+              <p className="text-[10px] text-neutral-500">Disponível para investir</p>
             </div>
           )}
 
@@ -114,19 +119,29 @@ export default async function DashboardPage() {
             <div className="text-right border-r border-neutral-800 pr-6">
               <div className="flex items-center justify-end gap-1.5 mb-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-neutral-500"></span>
-                <p className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono">
-                  Reserva USDT
+                <p className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono flex items-center gap-1">
+                  Reserva em Dólar
+                  <Tooltip
+                    position="bottom"
+                    text="Valor disponível em USDT (dólar digital estável) na sua conta. O robô usa este saldo para realizar operações de day trade no mercado de criptomoedas."
+                  />
                 </p>
               </div>
               <p className="text-xl font-bold font-mono text-white">
                 ${usdtBalance.toFixed(2)} <span className="text-xs text-neutral-400 font-sans">USDT</span>
               </p>
-              <p className="text-[10px] text-neutral-500">Caixa em Dólar / Sniper</p>
+              <p className="text-[10px] text-neutral-500">Capital para operações automáticas</p>
             </div>
           )}
 
           <div className="text-right border-r border-neutral-800 pr-6">
-            <p className="text-[10px] text-neutral-500 uppercase tracking-wider font-mono mb-1">Patrimônio Alocado</p>
+            <p className="text-[10px] text-neutral-500 uppercase tracking-wider font-mono mb-1 flex items-center justify-end gap-1">
+              Patrimônio Investido
+              <Tooltip
+                position="bottom"
+                text="Soma total de todos os ativos (criptomoedas) que o robô está segurando no momento, em Reais. Não inclui o saldo livre em caixa."
+              />
+            </p>
             <p className="text-2xl font-bold font-mono text-white">{formatCurrency(totalAllocated)}</p>
           </div>
 
@@ -158,10 +173,15 @@ export default async function DashboardPage() {
                   )}
                 </div>
                 <div>
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
-                    Sentimento de Mercado
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-1.5">
+                    Sentimento do Mercado
+                    <Tooltip
+                      position="right"
+                      text="Análise automática do 'humor' geral do mercado cripto. Bullish (otimista) significa que há mais compradores e tendência de alta. Bearish (pessimista) indica tendência de queda. Gerado pela leitura de notícias e dados macro."
+                      width="w-72"
+                    />
                   </h2>
-                  <p className="text-[11px] text-neutral-400">Consenso dos agentes analistas</p>
+                  <p className="text-[11px] text-neutral-400">Análise dos agentes de inteligência artificial</p>
                 </div>
               </div>
 
@@ -172,7 +192,7 @@ export default async function DashboardPage() {
                     : 'bg-rose-950/40 text-rose-300 border-rose-800/50'
                 }`}
               >
-                {sentiment.is_bullish ? 'Bullish (Greed)' : 'Bearish (Fear)'}
+                {sentiment.is_bullish ? 'Otimista (Alta)' : 'Pessimista (Baixa)'}
               </span>
             </div>
 
@@ -194,10 +214,15 @@ export default async function DashboardPage() {
                   <PieChartIcon className="w-4 h-4" />
                 </div>
                 <div>
-                  <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
-                    Alocação da Carteira
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-1.5">
+                    Minha Carteira
+                    <Tooltip
+                      position="right"
+                      text="Distribuição do seu dinheiro entre as diferentes criptomoedas. Cada fatia do gráfico representa um ativo e seu percentual em relação ao total investido."
+                      width="w-72"
+                    />
                   </h2>
-                  <p className="text-[11px] text-neutral-400">Distribuição patrimonial por ativo</p>
+                  <p className="text-[11px] text-neutral-400">Como seu patrimônio está distribuído</p>
                 </div>
               </div>
 
@@ -235,7 +260,7 @@ export default async function DashboardPage() {
                           <span className="font-bold text-white text-xs">{posCoin}</span>
                           <span
                             className="flex items-center text-[10px] text-neutral-400"
-                            title={wentUp ? 'Alta recente' : 'Baixa recente'}
+                            title={wentUp ? 'Preço subiu recentemente' : 'Preço caiu recentemente'}
                           >
                             {wentUp ? (
                               <ArrowUpRight className="w-3 h-3 text-neutral-400" />
@@ -248,7 +273,7 @@ export default async function DashboardPage() {
                           </span>
                         </div>
                         <p className="text-[10px] text-neutral-500 mt-0.5">
-                          {data.total_coins?.toFixed(6)} moedas
+                          {data.total_coins?.toFixed(6)} unidades
                         </p>
                       </div>
 
@@ -256,8 +281,15 @@ export default async function DashboardPage() {
                         <p className={`font-bold ${isProfiting ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {formatCurrency(currentPrice * (data.total_coins || 0))}
                         </p>
-                        <p className="text-[10px] text-neutral-500 mt-0.5">
-                          PM: {formatCurrency(data.avg_price || 0)}{' '}
+                        <p className="text-[10px] text-neutral-500 mt-0.5 flex items-center justify-end gap-1">
+                          <span title="Preço Médio de Compra: média ponderada de todos os preços pagos por este ativo">
+                            PM: {formatCurrency(data.avg_price || 0)}
+                          </span>
+                          <Tooltip
+                            position="left"
+                            text="PM = Preço Médio de Compra. É a média de quanto você pagou por cada unidade deste ativo. O percentual ao lado mostra se você está no lucro (+) ou prejuízo (-) em relação a esse preço."
+                            size="xs"
+                          />
                           <span className={isProfiting ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
                             ({pnlPercentage > 0 ? '+' : ''}{pnlPercentage.toFixed(2)}%)
                           </span>
@@ -286,10 +318,15 @@ export default async function DashboardPage() {
                       <Radio className="w-4 h-4" />
                     </div>
                     <div>
-                      <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono">
-                        Notícias &amp; Sinais da IA
+                      <h2 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-1.5">
+                        Notícias do Mercado Cripto
+                        <Tooltip
+                          position="right"
+                          text="Notícias recentes sobre criptomoedas, selecionadas e resumidas pela IA em português. Cada resumo indica como a notícia pode impactar o mercado."
+                          width="w-72"
+                        />
                       </h2>
-                      <p className="text-[11px] text-neutral-400">Traduzidas e resumidas em tempo real</p>
+                      <p className="text-[11px] text-neutral-400">Traduzidas e resumidas pela IA em tempo real</p>
                     </div>
                   </div>
 
@@ -372,11 +409,16 @@ export default async function DashboardPage() {
               <BookOpen className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono">
-                Diário de Bordo &amp; Auditoria do Fundo
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
+                Diário de Bordo
+                <Tooltip
+                  position="right"
+                  text="Registro completo de todos os ciclos de análise e operações realizados pelos agentes de IA. Inclui notícias consultadas, decisões tomadas e lições aprendidas."
+                  width="w-80"
+                />
               </h2>
               <p className="text-xs text-neutral-400">
-                Registro cronológico detalhado de todos os ciclos executados pelos agentes autônomos
+                Histórico detalhado de todas as análises e operações executadas
               </p>
             </div>
           </div>
@@ -430,12 +472,16 @@ export default async function DashboardPage() {
                       <span className="flex items-center gap-1 px-2 py-0.5 bg-amber-500/10 text-amber-400 text-[10px] font-mono font-bold rounded-full border border-amber-500/30 tracking-wider">
                         <FlaskConical className="w-3 h-3" />
                         SIMULAÇÃO
+                        <Tooltip
+                          position="right"
+                          text="Modo de simulação: o robô analisa o mercado e decide o que faria, mas NÃO executa ordens reais. É usado para testar estratégias sem arriscar dinheiro real."
+                        />
                       </span>
                     )}
                     {isLive && (
                       <span className="flex items-center gap-1 px-2 py-0.5 bg-neutral-800 text-neutral-300 text-[10px] font-mono font-bold rounded-full border border-neutral-700 tracking-wider">
                         <Zap className="w-3 h-3 text-neutral-400" />
-                        REAL
+                        OPERAÇÃO REAL
                       </span>
                     )}
                   </div>

@@ -15,6 +15,7 @@ import {
   MinusCircle,
   RefreshCw,
 } from 'lucide-react'
+import Tooltip from './Tooltip'
 
 export interface DailySummaryData {
   totalTrades: number
@@ -64,8 +65,27 @@ export default function DailyTradingSummaryCard({
       const res = await fetch('/api/daytrade')
       if (res.ok) {
         const json = await res.json()
-        if (json.dailySummary) setSummary(json.dailySummary)
-        if (json.dailyTrades) setTrades(json.dailyTrades)
+        if (json.dailySummary) {
+          const s = json.dailySummary
+          // Mapeia snake_case da API para camelCase do componente
+          setSummary({
+            totalTrades: s.total_trades ?? s.totalTrades ?? 0,
+            totalClosed: s.total_trades ?? s.totalClosed ?? 0,
+            winningTrades: s.winning_trades ?? s.winningTrades ?? 0,
+            losingTrades: s.losing_trades ?? s.losingTrades ?? 0,
+            breakevenTrades: s.breakeven_trades ?? s.breakevenTrades ?? 0,
+            winRatePct: s.win_rate_pct ?? s.winRatePct ?? 0,
+            netPnlBrl: s.net_pnl_brl ?? s.netPnlBrl ?? 0,
+            netPnlUsdt: s.net_pnl_usdt ?? s.netPnlUsdt ?? 0,
+            totalVolumeBrl: s.total_volume_brl ?? s.totalVolumeBrl ?? 0,
+            totalVolumeUsdt: s.total_volume_usdt ?? s.totalVolumeUsdt ?? 0,
+            todayDate: s.date ?? s.todayDate ?? 'Hoje',
+          })
+          // Os trades vêm dentro de dailySummary.trades
+          if (Array.isArray(s.trades)) setTrades(s.trades)
+        }
+        // Fallback: se vier dailyTrades separado
+        if (json.dailyTrades && Array.isArray(json.dailyTrades)) setTrades(json.dailyTrades)
       }
     } catch (e) {
       console.error('Erro ao atualizar balanço diário:', e)
@@ -136,8 +156,11 @@ export default function DailyTradingSummaryCard({
           {/* NET USDT */}
           <div className="p-3 rounded-xl bg-neutral-950/70 border border-neutral-800/80">
             <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 mb-1 flex items-center gap-1">
-              Líquido USDT
-              <TrendingUp className="w-3 h-3 text-neutral-400" />
+              Resultado em Dólar
+              <Tooltip
+                position="bottom"
+                text="Lucro ou prejuízo líquido do dia em dólar (USDT). Verde = você ganhou. Vermelho = você perdeu. Já descontando as taxas da corretora."
+              />
             </p>
             <p
               className={`text-base font-mono font-bold ${
@@ -148,15 +171,20 @@ export default function DailyTradingSummaryCard({
               {formatUsdt(netUsdt)}
             </p>
             <p className="text-[10px] text-neutral-500 mt-1">
-              Vol: {formatUsdt(summary?.totalVolumeUsdt ?? 0)}
+              <span title="Volume total movimentado hoje em USDT">
+                Vol. total: {formatUsdt(summary?.totalVolumeUsdt ?? 0)}
+              </span>
             </p>
           </div>
 
           {/* NET BRL */}
           <div className="p-3 rounded-xl bg-neutral-950/70 border border-neutral-800/80">
             <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 mb-1 flex items-center gap-1">
-              Líquido BRL
-              <TrendingUp className="w-3 h-3 text-neutral-400" />
+              Resultado em Reais
+              <Tooltip
+                position="bottom"
+                text="Lucro ou prejuízo líquido do dia em Reais (BRL). Calculado com a taxa de câmbio aproximada do dia. Verde = positivo. Vermelho = negativo."
+              />
             </p>
             <p
               className={`text-base font-mono font-bold ${
@@ -167,28 +195,35 @@ export default function DailyTradingSummaryCard({
               {formatBrl(netBrl)}
             </p>
             <p className="text-[10px] text-neutral-500 mt-1">
-              Vol: {formatBrl(summary?.totalVolumeBrl ?? 0)}
+              <span title="Volume total movimentado hoje em Reais">
+                Vol. total: {formatBrl(summary?.totalVolumeBrl ?? 0)}
+              </span>
             </p>
           </div>
 
           {/* WIN RATE */}
           <div className="p-3 rounded-xl bg-neutral-950/70 border border-neutral-800/80">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400">Win Rate</p>
+              <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 flex items-center gap-1">
+                Assertividade
+                <Tooltip
+                  position="left"
+                  text="Percentual de operações encerradas com lucro. Ex: 60% = em 10 operações, 6 deram lucro e 4 deram prejuízo. W = ganhos, L = perdas, E = empatados."
+                />
+              </p>
               <span className="text-[10px] font-mono font-bold text-white">{winRate.toFixed(1)}%</span>
             </div>
             {/* Barra de Progresso */}
-            <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden mb-1.5">
+            <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden mb-1.5" title={`${winRate.toFixed(1)}% das operações foram lucrativas`}>
               <div
                 className="h-full bg-neutral-300 rounded-full transition-all duration-500"
                 style={{ width: `${Math.min(100, Math.max(0, winRate))}%` }}
               />
             </div>
             <div className="flex items-center justify-between text-[10px] font-mono text-neutral-400">
-              <span className="text-emerald-400 font-bold">{wins}W</span>
-              <span className="text-rose-400 font-bold">{losses}L</span>
-              <span className="text-neutral-500">{breakeven}E</span>
-              <span className="text-neutral-500">({totalClosed} tot)</span>
+              <span className="text-emerald-400 font-bold" title="Operações com lucro">{wins} ganhos</span>
+              <span className="text-rose-400 font-bold" title="Operações com prejuízo">{losses} perdas</span>
+              <span className="text-neutral-500" title="Total de operações encerradas">({totalClosed} op.)</span>
             </div>
           </div>
         </div>

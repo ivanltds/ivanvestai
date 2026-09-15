@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import DaytradeChart from './DaytradeChart'
 import SniperChatFeed from './SniperChatFeed'
+import Tooltip from './Tooltip'
 
 export default function CurrentDaytradeSession() {
   const [sessionData, setSessionData] = useState<any>(null)
@@ -149,10 +150,10 @@ export default function CurrentDaytradeSession() {
             <div className="flex items-center gap-2">
               <h2 className="text-sm font-bold tracking-tight text-white font-mono uppercase">
                 {isRunning
-                  ? 'Sessão Day Trade Ativa'
+                  ? 'Sessão de Trading Ativa'
                   : isPending
                   ? 'Iniciando Sessão...'
-                  : 'Sessão Day Trade (10 min)'}
+                  : 'Sessão de Trading Automático'}
               </h2>
               {isRunning && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-neutral-800 text-neutral-200 border border-neutral-700">
@@ -161,7 +162,7 @@ export default function CurrentDaytradeSession() {
               )}
             </div>
             <p className="text-[11px] text-neutral-400">
-              Operações de alta frequência com trailing stop dinâmico e proteção ATR
+              O robô compra e vende automaticamente buscando lucros em movimentos rápidos de preço
             </p>
           </div>
         </div>
@@ -175,7 +176,6 @@ export default function CurrentDaytradeSession() {
                 ? 'bg-neutral-900 border-neutral-800 text-neutral-300'
                 : 'bg-rose-950/40 border-rose-800/50 text-rose-300'
             }`}
-            title={btcMacro?.reason || 'Status do Gatekeeper BTC'}
           >
             {btcMacro?.healthy !== false ? (
               <ShieldCheck className="w-3.5 h-3.5 text-neutral-400" />
@@ -183,6 +183,10 @@ export default function CurrentDaytradeSession() {
               <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
             )}
             <span className="text-[11px]">BTC: {btcMacro?.regime || 'OK'}</span>
+            <Tooltip
+              position="bottom"
+              text={`Filtro de mercado: o robô só opera quando o Bitcoin (ativo mais importante do mercado cripto) está em condições favoráveis. Isso reduz o risco de entrar em momentos ruins.${btcMacro?.reason ? ' Motivo: ' + btcMacro.reason : ''}`}
+            />
           </div>
 
           {/* TIMER DA SESSÃO */}
@@ -192,11 +196,15 @@ export default function CurrentDaytradeSession() {
               <span className="text-white font-bold">{formatTimer(timerLeft)} / 10:00</span>
             ) : autoConfig?.nextAutoTriggerSeconds ? (
               <span className="text-neutral-400">
-                Próximo: {formatTimer(autoConfig.nextAutoTriggerSeconds)}
+                Próxima sessão em: {formatTimer(autoConfig.nextAutoTriggerSeconds)}
               </span>
             ) : (
               <span className="text-neutral-400">Aguardando</span>
             )}
+            <Tooltip
+              position="bottom"
+              text="Contador da sessão atual (cada sessão dura até 10 minutos). Quando não há sessão ativa, mostra o tempo até a próxima execução automática."
+            />
           </div>
 
           {/* BOTÃO DE CONTROLE (DISPARO / PARADA) */}
@@ -228,8 +236,12 @@ export default function CurrentDaytradeSession() {
       <div className="py-4 border-b border-neutral-800/80">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 mb-1">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 mb-1 flex items-center gap-1">
               Resultado da Sessão Atual
+              <Tooltip
+                position="right"
+                text="Ganho ou perda acumulada nesta sessão, em percentual e valores estimados. Uma sessão pode ter múltiplas operações e dura até 10 minutos."
+              />
             </p>
             <div className="flex items-baseline gap-3">
               <span
@@ -249,15 +261,21 @@ export default function CurrentDaytradeSession() {
 
           <div className="flex items-center gap-4 text-xs font-mono text-right">
             <div>
-              <p className="text-[10px] text-neutral-500 uppercase">Capital em Uso</p>
+              <p className="text-[10px] text-neutral-500 uppercase flex items-center gap-1 justify-end">
+                Capital Alocado
+                <Tooltip
+                  position="left"
+                  text="Valor em dinheiro que o robô está usando para operar nesta sessão. Este valor é reservado da sua carteira e devolvido (com lucro ou prejuízo) ao final da sessão."
+                />
+              </p>
               <p className="text-white font-bold">
                 {sessionCurrency === 'BRL' ? `R$ ${capital.toFixed(2)}` : `$ ${capital.toFixed(2)} USDT`}
               </p>
             </div>
             <div>
-              <p className="text-[10px] text-neutral-500 uppercase">Status Operacional</p>
+              <p className="text-[10px] text-neutral-500 uppercase">Status</p>
               <p className="text-neutral-300">
-                {isRunning ? 'Em Execução' : isPending ? 'Preparando' : 'Ocioso'}
+                {isRunning ? 'Em Execução' : isPending ? 'Preparando' : 'Aguardando'}
               </p>
             </div>
           </div>
@@ -268,14 +286,18 @@ export default function CurrentDaytradeSession() {
       <div className="py-4">
         <p className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 mb-3 flex items-center gap-1.5">
           <Activity className="w-3 h-3" />
-          Posições Sob Gestão do Sniper
+          Posições Abertas
+          <Tooltip
+            position="right"
+            text="Uma posição aberta significa que o robô já comprou uma criptomoeda e ainda não vendeu. Ele está monitorando o preço para vender no melhor momento."
+          />
         </p>
 
         {!hasActivePositions ? (
           <div className="p-5 rounded-xl bg-neutral-950/60 border border-neutral-800/80 text-center text-xs font-mono text-neutral-500">
             {isRunning
-              ? 'Sniper analisando scanner e aguardando confirmação de entrada nas Bandas de Bollinger...'
-              : 'Nenhuma posição ativa no momento. O robô está aguardando o próximo ciclo.'}
+              ? 'O robô está analisando o mercado. Aguardando o melhor momento para entrar em uma operação...'
+              : 'Nenhuma operação aberta no momento. O robô está aguardando o próximo ciclo automático.'}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -319,15 +341,36 @@ export default function CurrentDaytradeSession() {
 
                   <div className="grid grid-cols-3 gap-2 text-[11px] pt-2 border-t border-neutral-850">
                     <div>
-                      <p className="text-[9px] text-neutral-500 uppercase">Entrada</p>
+                      <p className="text-[9px] text-neutral-500 uppercase flex items-center gap-0.5">
+                        Preço de Entrada
+                        <Tooltip
+                          position="top"
+                          text="Preço pelo qual o robô comprou esta moeda."
+                          size="xs"
+                        />
+                      </p>
                       <p className="text-neutral-300 font-semibold">${entPrice.toFixed(4)}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] text-neutral-500 uppercase">Meta (+2.0%)</p>
+                      <p className="text-[9px] text-neutral-500 uppercase flex items-center gap-0.5">
+                        Meta de Lucro
+                        <Tooltip
+                          position="top"
+                          text="Preço-alvo para o robô vender e realizar o lucro. Ao atingir este valor, a posição é encerrada automaticamente."
+                          size="xs"
+                        />
+                      </p>
                       <p className="text-emerald-400 font-semibold">${targetPrice.toFixed(4)}</p>
                     </div>
                     <div>
-                      <p className="text-[9px] text-neutral-500 uppercase">Stop ATR</p>
+                      <p className="text-[9px] text-neutral-500 uppercase flex items-center gap-0.5">
+                        Stop Loss
+                        <Tooltip
+                          position="top"
+                          text="Preço de segurança: se o preço cair até aqui, o robô vende imediatamente para limitar o prejuízo. É uma proteção automática."
+                          size="xs"
+                        />
+                      </p>
                       <p className="text-rose-400 font-semibold">${stopPrice.toFixed(4)}</p>
                     </div>
                   </div>
@@ -335,7 +378,11 @@ export default function CurrentDaytradeSession() {
                   {pos.trailing_armed && (
                     <div className="flex items-center gap-1.5 text-[10px] text-amber-300 bg-amber-950/30 px-2 py-1 rounded border border-amber-800/40">
                       <Shield className="w-3 h-3 text-amber-400" />
-                      <span>Trailing stop móvel armado e protegendo o lucro</span>
+                      <span>Proteção de lucro ativa (Trailing Stop)</span>
+                      <Tooltip
+                        position="left"
+                        text="O Trailing Stop protege o lucro já obtido: conforme o preço sobe, o stop de segurança acompanha automaticamente. Se o preço reverter, a venda é acionada preservando o ganho."
+                      />
                     </div>
                   )}
                 </div>
@@ -355,12 +402,12 @@ export default function CurrentDaytradeSession() {
           {isExpanded ? (
             <>
               <ChevronUp className="w-3.5 h-3.5 text-neutral-400 group-hover:text-white transition-transform" />
-              <span>Recolher Gráfico &amp; Feed de Decisões</span>
+              <span>Recolher gráfico e decisões da IA</span>
             </>
           ) : (
             <>
               <ChevronDown className="w-3.5 h-3.5 text-neutral-400 group-hover:text-white transition-transform" />
-              <span>Expandir Gráfico &amp; Feed de Decisões da IA</span>
+              <span>Ver gráfico de preços e decisões da IA</span>
             </>
           )}
         </button>

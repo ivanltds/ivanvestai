@@ -30,12 +30,18 @@ class KVDatabase:
         if not self.enabled:
             return None
         
-        # Faz o URL encode de todos os argumentos (importante para JSON e caracteres especiais)
-        import urllib.parse
-        encoded_args = [urllib.parse.quote(str(a), safe='') for a in args]
-        endpoint = f"{self.url}/{'/'.join(encoded_args)}"
+        # Upstash aceita array JSON no body usando POST para a raiz
+        payload = json.dumps(list(args)).encode('utf-8')
         
-        req = urllib.request.Request(endpoint, headers={"Authorization": f"Bearer {self.token}"})
+        req = urllib.request.Request(
+            self.url, 
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json"
+            },
+            method='POST'
+        )
         
         try:
             with urllib.request.urlopen(req, timeout=10) as response:
@@ -535,7 +541,9 @@ class KVDatabase:
             "max_spread_pct": 0.08,
             "min_rvol": 1.5,
             "disqualified_pairs": [],
-            "btc_macro_filter": True
+            "btc_macro_filter": True,
+            "allow_shorts": True,
+            "max_leverage": 20
         }
         try:
             data = self._execute_command("get", "ai:sniper_policy")

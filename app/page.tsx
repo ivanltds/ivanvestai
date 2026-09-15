@@ -436,7 +436,7 @@ export default async function DashboardPage() {
           ) : (
             auditLogs.map((log: any, idx: number) => {
               const entry = log
-              const date = new Date((entry.timestamp || 0) * 1000).toLocaleString('pt-BR')
+              const date = new Date((entry.timestamp || 0) * 1000).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
               const isSimulation = entry.dry_run === true
               const isLive = entry.dry_run === false
 
@@ -537,12 +537,17 @@ export default async function DashboardPage() {
                   {entry.trades && entry.trades.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
                       {entry.trades.map((t: any, i: number) => {
-                        const isBuy = (t.action || 'BUY').toUpperCase() === 'BUY'
+                        const actionUpper = (t.action || t.type || 'BUY').toUpperCase()
+                        const isBuy = actionUpper === 'BUY' || actionUpper.includes('LONG') || actionUpper === 'OPEN'
+                        
                         const parts = (t.symbol || '').split('/')
                         const baseAsset = parts[0] || t.symbol || 'CRYPTO'
                         const quoteAsset = parts[1] || 'BRL'
                         const fromAsset = t.from_asset || (isBuy ? quoteAsset : baseAsset)
                         const toAsset = t.to_asset || (isBuy ? baseAsset : quoteAsset)
+
+                        const fiatAmount = t.fiat_amount ?? t.amount
+                        const cryptoQty = t.crypto_qty ?? t.qty
 
                         return (
                           <div
@@ -552,7 +557,7 @@ export default async function DashboardPage() {
                             <div className="flex justify-between items-center mb-2">
                               <div className="flex items-center gap-2">
                                 <span className="px-2 py-0.5 text-[9px] font-bold rounded uppercase tracking-wider border bg-neutral-800 text-neutral-300 border-neutral-700">
-                                  {isBuy ? 'COMPRA' : 'VENDA'}
+                                  {isBuy ? 'COMPRA / OPEN' : 'VENDA / CLOSE'}
                                 </span>
                                 <div className="flex items-center gap-1 text-[11px] font-bold text-neutral-300">
                                   <span className="text-neutral-400">{fromAsset}</span>
@@ -566,29 +571,29 @@ export default async function DashboardPage() {
                             <div className="grid grid-cols-2 gap-2 text-[11px] p-2 rounded-lg bg-neutral-950/60 border border-neutral-850">
                               <div>
                                 <span className="text-[9px] text-neutral-500 uppercase block">
-                                  {isBuy ? 'Pago' : 'Entregue'}
+                                  {isBuy ? 'Margem/Pago' : 'Entregue'}
                                 </span>
                                 <span className="font-bold text-white block">
                                   {isBuy
-                                    ? t.fiat_amount
-                                      ? formatCurrency(t.fiat_amount)
+                                    ? fiatAmount
+                                      ? formatCurrency(fiatAmount)
                                       : '-'
-                                    : t.crypto_qty
-                                    ? `${t.crypto_qty.toFixed(6)} ${baseAsset}`
+                                    : cryptoQty
+                                    ? `${Number(cryptoQty).toFixed(6)} ${baseAsset}`
                                     : '-'}
                                 </span>
                               </div>
                               <div>
                                 <span className="text-[9px] text-neutral-500 uppercase block">
-                                  {isBuy ? 'Recebido' : 'Retorno Fiat'}
+                                  {isBuy ? 'Recebido/Posição' : 'Retorno'}
                                 </span>
                                 <span className="font-bold text-white block">
                                   {isBuy
-                                    ? t.crypto_qty
-                                      ? `${t.crypto_qty.toFixed(6)} ${baseAsset}`
+                                    ? cryptoQty
+                                      ? `${Number(cryptoQty).toFixed(6)} ${baseAsset}`
                                       : '-'
-                                    : t.fiat_amount
-                                    ? formatCurrency(t.fiat_amount)
+                                    : fiatAmount
+                                    ? formatCurrency(fiatAmount)
                                     : '-'}
                                 </span>
                               </div>

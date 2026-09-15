@@ -34,6 +34,7 @@ export default function CurrentDaytradeSession() {
   const [isExpanded, setIsExpanded] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [timerLeft, setTimerLeft] = useState<number | null>(null)
+  const [elapsedTimer, setElapsedTimer] = useState<number>(0)
 
   const fetchSession = async () => {
     try {
@@ -71,6 +72,16 @@ export default function CurrentDaytradeSession() {
     return () => clearInterval(interval)
   }, [timerLeft])
 
+  // Timer de tempo decorrido para modo ilimitado
+  useEffect(() => {
+    if (!isRunning || !sessionData?.started_at) return
+    const start = new Date(sessionData.started_at).getTime()
+    const interval = setInterval(() => {
+      setElapsedTimer(Math.floor((Date.now() - start) / 1000))
+    }, 1000)
+    setElapsedTimer(Math.floor((Date.now() - start) / 1000))
+    return () => clearInterval(interval)
+  }, [sessionData?.started_at, isRunning])
   const handleManualTrigger = async () => {
     if (isSubmitting) return
     setIsSubmitting(true)
@@ -193,7 +204,11 @@ export default function CurrentDaytradeSession() {
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-950/80 border border-neutral-800 text-neutral-300 text-xs font-mono">
             <Clock className="w-3.5 h-3.5 text-neutral-400" />
             {isRunning ? (
-              <span className="text-white font-bold">{formatTimer(timerLeft)} / 10:00</span>
+              sessionData?.unlimited_hold ? (
+                <span className="text-white font-bold">{formatTimer(elapsedTimer)} (Ilimitado)</span>
+              ) : (
+                <span className="text-white font-bold">{formatTimer(timerLeft)} / 10:00</span>
+              )
             ) : autoConfig?.nextAutoTriggerSeconds ? (
               <span className="text-neutral-400">
                 Próxima sessão em: {formatTimer(autoConfig.nextAutoTriggerSeconds)}
@@ -316,7 +331,9 @@ export default function CurrentDaytradeSession() {
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-white text-sm">{sym}</span>
+                      <span className="font-bold text-white text-sm">
+                        {sym} <span className="text-[10px] ml-1 text-neutral-400 bg-neutral-900 px-1 py-0.5 rounded border border-neutral-800">{pos.direction || 'LONG'} {pos.leverage || 1}x</span>
+                      </span>
                       <span
                         className={`flex items-center gap-0.5 text-[11px] font-bold px-1.5 py-0.5 rounded ${
                           isPosProfit
@@ -367,7 +384,7 @@ export default function CurrentDaytradeSession() {
                         Stop Loss
                         <Tooltip
                           position="top"
-                          text="Preço de segurança: se o preço cair até aqui, o robô vende imediatamente para limitar o prejuízo. É uma proteção automática."
+                          text="Preço de segurança: se a operação for contra a sua direção e atingir este valor, o robô encerra imediatamente para limitar o prejuízo."
                           size="xs"
                         />
                       </p>

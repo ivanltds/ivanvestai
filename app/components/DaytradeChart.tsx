@@ -10,6 +10,7 @@ import {
   YAxis,
   Tooltip,
   ReferenceLine,
+  Brush,
 } from 'recharts'
 
 export interface PositionData {
@@ -58,6 +59,8 @@ export default function DaytradeChart({
 }: DaytradeChartProps) {
   const [mounted, setMounted] = useState(false)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [brushRange, setBrushRange] = useState<{ startIndex?: number, endIndex?: number }>({})
+  const chartContainerRef = React.useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     setMounted(true)
@@ -299,17 +302,85 @@ export default function DaytradeChart({
 
     const minP = validPrices.length > 0 ? Math.min(...validPrices) : 100
     const maxP = validPrices.length > 0 ? Math.max(...validPrices) : 101
-    const span = maxP - minP
+
+    let absoluteMin = minP
+    let absoluteMax = maxP
+
+    if (activeEntryPrice) {
+      absoluteMin = Math.min(absoluteMin, activeEntryPrice)
+      absoluteMax = Math.max(absoluteMax, activeEntryPrice)
+    }
+    if (activeTargetPrice) {
+      absoluteMin = Math.min(absoluteMin, activeTargetPrice)
+      absoluteMax = Math.max(absoluteMax, activeTargetPrice)
+    }
+    if (activeBreakevenPrice) {
+      absoluteMin = Math.min(absoluteMin, activeBreakevenPrice)
+      absoluteMax = Math.max(absoluteMax, activeBreakevenPrice)
+    }
+
+    const span = absoluteMax - absoluteMin
 
     // Espaço visual de pelo menos 0.35% do preço para que Compra, Breakeven e Meta fiquem bem destacadas
-    const baseRef = activeEntryPrice || minP
+    const baseRef = activeEntryPrice || absoluteMin
     const padding = Math.max(span * 0.45, baseRef * 0.004)
 
-    const yMin = Number((minP - padding).toFixed(minP < 1 ? 4 : 2))
-    const yMax = Number((maxP + padding).toFixed(minP < 1 ? 4 : 2))
+    const yMin = Number((absoluteMin - padding).toFixed(absoluteMin < 1 ? 4 : 2))
+    const yMax = Number((absoluteMax + padding).toFixed(absoluteMin < 1 ? 4 : 2))
 
     return [Math.max(0, yMin), yMax] as [number, number]
   }, [chartData, activeEntryPrice, activeBreakevenPrice, activeTargetPrice, latestPrice])
+
+  // Lógica de Zoom com Scroll + Ctrl
+  useEffect(() => {
+    const container = chartContainerRef.current
+    if (!container) return
+
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault() // Impede a rolagem da página inteira
+
+        setBrushRange(prev => {
+          const totalPoints = chartData.length
+          if (totalPoints <= 1) return prev
+
+          let start = prev.startIndex ?? 0
+          let end = prev.endIndex ?? (totalPoints - 1)
+
+          // deltaY < 0 = scroll para cima (Zoom In)
+          // deltaY > 0 = scroll para baixo (Zoom Out)
+          const zoomFactor = Math.max(1, Math.floor(totalPoints * 0.05)) // 5% do gráfico por "tick"
+          
+          if (e.deltaY < 0) {
+            // Zoom in
+            if (end - start > zoomFactor * 2 + 5) { // mínimo de pontos visíveis
+              start += zoomFactor
+              end -= zoomFactor
+            }
+          } else {
+            // Zoom out
+            start -= zoomFactor
+            end += zoomFactor
+          }
+
+          start = Math.max(0, start)
+          end = Math.min(totalPoints - 1, end)
+
+          if (start >= end) {
+            start = prev.startIndex ?? 0
+            end = prev.endIndex ?? (totalPoints - 1)
+          }
+
+          return { startIndex: start, endIndex: end }
+        })
+      }
+    }
+
+    container.addEventListener('wheel', handleWheel, { passive: false })
+    return () => {
+      container.removeEventListener('wheel', handleWheel)
+    }
+  }, [chartData.length])
 
   if (!mounted) {
     return (
@@ -431,7 +502,10 @@ export default function DaytradeChart({
       </div>
 
       {/* Gráfico de Linha Recharts com Três Linhas de Referência Espaçadas */}
-      <div className="w-full h-64 bg-neutral-950/80 rounded-xl border border-neutral-800/80 p-3 pt-4">
+      <div 
+        ref={chartContainerRef}
+        className="w-full h-64 bg-neutral-950/80 rounded-xl border border-neutral-800/80 p-3 pt-4"
+      >
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={chartData} margin={{ top: 15, right: 30, left: 10, bottom: 0 }}>
             <defs>
@@ -569,6 +643,22 @@ export default function DaytradeChart({
               activeDot={{ r: 5, stroke: '#fff', strokeWidth: 1.5, fill: chartColor }}
               connectNulls={true}
               isAnimationActive={false}
+            />
+            
+            {/* Componente Brush para habilitar Zoom e Pan no gráfico */}
+            <Brush 
+              dataKey="time" 
+              height={20} 
+              stroke="#525252"
+              fill="#171717"
+              tickFormatter={() => ''}
+              startIndex={brushRange.startIndex}
+              endIndex={brushRange.endIndex}
+              onChange={(newRange) => {
+                if (newRange.startIndex !== undefined && newRange.endIndex !== undefined) {
+                  setBrushRange({ startIndex: newRange.startIndex, endIndex: newRange.endIndex })
+                }
+              }}
             />
           </ComposedChart>
         </ResponsiveContainer>

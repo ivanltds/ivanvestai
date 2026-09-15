@@ -334,7 +334,7 @@ export default function DailyTradingSummaryCard({
                   const isWin = (t.net_pnl_fiat ?? 0) > 0
                   const isLoss = (t.net_pnl_fiat ?? 0) < 0
                   const timeFormatted = t.timestamp
-                    ? new Date(t.timestamp).toLocaleTimeString('pt-BR')
+                    ? new Date(t.timestamp).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' })
                     : '--:--'
 
                   return (

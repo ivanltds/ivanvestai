@@ -227,7 +227,7 @@ export async function GET() {
     uniqueTodayTrades.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
 
     // Filtra posições encerradas (vendas) para cálculo oficial de PnL financeiro
-    const sellTrades = uniqueTodayTrades.filter((t) => t.action === 'SELL')
+    const sellTrades = uniqueTodayTrades.filter((t) => ['SELL', 'CLOSE_LONG', 'CLOSE_SHORT'].includes(t.action))
     const totalClosed = sellTrades.length
     const winningTrades = sellTrades.filter((t) => t.net_pnl_fiat > 0).length
     const losingTrades = sellTrades.filter((t) => t.net_pnl_fiat < 0).length

@@ -186,7 +186,7 @@ export default function SniperChatFeed({ messages, isRunning }: SniperChatFeedPr
                   </div>
                   <span className="text-[10px] text-neutral-500">
                     {msg.elapsed_str ? `T+${msg.elapsed_str}` : ''}
-                    {msg.timestamp && ` (${new Date(msg.timestamp).toLocaleTimeString('pt-BR')})`}
+                    {msg.timestamp && ` (${new Date(msg.timestamp).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo' })})`}
                   </span>
                 </div>
                 <p

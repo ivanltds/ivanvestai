@@ -79,7 +79,7 @@ class NewsResearcherAgent:
                             return type('E', (), {'text': m.group(1).strip() if m else ''})() if m else None
                     items = [FakeItem(r) for r in items_raw[:15]]
 
-                for item in items[:15]:
+                for item in items[:10]:
                     title_el = item.find('title')
                     desc_el = item.find('description')
                     link_el = item.find('link')
@@ -100,7 +100,7 @@ class NewsResearcherAgent:
                     seen_urls.add(norm_link)
 
                     ts, iso, formatted_date = self._parse_pubdate(pub_text)
-                    clean_desc = self._clean_html(desc)[:350]
+                    clean_desc = self._clean_html(desc)[:200]
 
                     raw_items.append({
                         "title": title,
@@ -118,8 +118,8 @@ class NewsResearcherAgent:
         # Ordena ESTRITAMENTE pela data/hora de publicação (mais recente primeiro)
         raw_items.sort(key=lambda x: x["timestamp"], reverse=True)
 
-        # Seleciona as 15 notícias mais recentes
-        top_items = raw_items[:15]
+        # Seleciona as 10 notícias mais recentes
+        top_items = raw_items[:10]
 
         # Monta o texto puro para análise do LLM
         prompt_lines = []
@@ -132,7 +132,7 @@ class NewsResearcherAgent:
 
         return {
             "items": top_items,
-            "text": "\n".join(prompt_lines)
+            "text": "\n".join(prompt_lines)[:25000] # Limite de segurança de contexto
         }
 
     def analyze_news(self) -> dict:

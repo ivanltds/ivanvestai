@@ -47,9 +47,19 @@ class PerformanceAnalystAgent:
                 if isinstance(m, dict) and m.get('tag') in ['COMPRA', 'VENDA', 'RESULTADO', 'SCANNER']:
                     recent_thoughts.append(f"[{m.get('tag')}] {m.get('symbol')}: {m.get('message')}")
 
+        # Simplifica logs do DCA para não estourar o limite de tokens da OpenAI (ignora raw_news enorme)
+        simplified_logs = []
+        if audit_logs:
+            for log in audit_logs[:10]:
+                simplified_logs.append({
+                    "timestamp": log.get("timestamp"),
+                    "market_sentiment": log.get("news_insights", {}).get("market_sentiment", ""),
+                    "trades": log.get("trades", [])
+                })
+
         user_prompt = f"""
         Histórico Recente de Swing Trade / DCA (Logs):
-        {json.dumps(audit_logs[:10] if audit_logs else [])}
+        {json.dumps(simplified_logs)}
         
         Posições Abertas Atuais na Carteira (PnL):
         {json.dumps(open_positions if open_positions else {})}

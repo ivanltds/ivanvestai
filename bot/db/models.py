@@ -1,0 +1,175 @@
+"""Modelo de dados (Postgres) — fonte de verdade compartilhada entre bot/ e web/.
+
+Ver seção 4 de arquitetura-tecnica.md para o desenho original.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import uuid
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+def _uuid_pk() -> Mapped[uuid.UUID]:
+    return mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+
+def _now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)
+    keys_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+
+class Setting(Base):
+    """Chave/valor da tela de configurações — sobrescreve os defaults do .env."""
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now, server_default=func.now())
+
+
+class WalletSnapshot(Base):
+    __tablename__ = "wallet_snapshots"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    asset: Mapped[str] = mapped_column(String, nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    avg_buy_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    value_usdt: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String, default="bot")  # bot | manual
+
+
+class NewsItem(Base):
+    __tablename__ = "news_items"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    title_original: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_pt: Mapped[str] = mapped_column(Text, nullable=False)
+    sentiment_score: Mapped[float] = mapped_column(Float, nullable=False)  # -1 a +1
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    dedup_hash: Mapped[str] = mapped_column(String, index=True, unique=True)
+
+
+class Opportunity(Base):
+    __tablename__ = "opportunities"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    cycle_id: Mapped[str] = mapped_column(String, index=True)
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    pair: Mapped[str] = mapped_column(String, nullable=False)
+    strategy: Mapped[str] = mapped_column(String, nullable=False)  # trend|mean_reversion|breakout|scalping
+    market_regime: Mapped[str] = mapped_column(String, nullable=False)
+    indicators_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending|approved|rejected
+    final_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    decisions: Mapped[list["CommitteeDecision"]] = relationship(back_populates="opportunity")
+
+
+class CommitteeDecision(Base):
+    """= agent_runs — racional completo de cada agente por oportunidade, pra auditoria."""
+
+    __tablename__ = "committee_decisions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    opportunity_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("opportunities.id"))
+    agent_name: Mapped[str] = mapped_column(String, nullable=False)
+    decision: Mapped[str] = mapped_column(String, nullable=False)  # approve|reject|abstain
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    model_used: Mapped[str] = mapped_column(String, nullable=False)
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+
+    opportunity: Mapped["Opportunity"] = relationship(back_populates="decisions")
+
+
+class Position(Base):
+    __tablename__ = "positions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    pair: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String, default="open")  # open|closed
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    avg_entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trailing_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    trailing_reference_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sell_flag: Mapped[str] = mapped_column(String, default="none")  # none|immediate|optimized
+    rebuy_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    opened_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
+    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Trade(Base):
+    __tablename__ = "trades"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    position_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("positions.id"), nullable=True)
+    pair: Mapped[str] = mapped_column(String, nullable=False)
+    side: Mapped[str] = mapped_column(String, nullable=False)  # buy|sell
+    order_type: Mapped[str] = mapped_column(String, nullable=False)  # market|limit
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    fee: Mapped[float] = mapped_column(Float, default=0.0)
+    fee_asset: Mapped[str] = mapped_column(String, default="BNB")
+    reason: Mapped[str] = mapped_column(String, nullable=False)  # committee|manual_flag|manual_dashboard
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+
+
+class DailyEquity(Base):
+    __tablename__ = "daily_equity"
+
+    date: Mapped[dt.date] = mapped_column(primary_key=True)
+    equity_brl: Mapped[float] = mapped_column(Float, nullable=False)
+    equity_usdt: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ApiCostLog(Base):
+    __tablename__ = "api_cost_log"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    agent_name: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)

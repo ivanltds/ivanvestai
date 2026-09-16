@@ -1,0 +1,14 @@
+{
+  "_comment": "Classificação setorial v1 (curada manualmente, baseada em categorias públicas amplamente aceitas). Cobre os ativos mais líquidos/comuns do Top 100. Qualquer par fora dessa lista cai em 'unknown' e o MarketScannerAgent deve tratar 'unknown' como setor neutro (não bloqueia, mas não conta pra diversificação). Revisar/expandir periodicamente.",
+  "sectors": {
+    "layer1": ["BTC", "ETH", "SOL", "BNB", "ADA", "AVAX", "TON", "DOT", "TRX", "NEAR", "APT", "SUI", "SEI", "ATOM", "ETC", "ALGO", "HBAR", "ICP", "KAS", "MONAD"],
+    "layer2": ["MATIC", "POL", "ARB", "OP", "STRK", "MANTA", "ZK", "METIS", "IMX"],
+    "defi": ["UNI", "AAVE", "MKR", "LDO", "CRV", "SNX", "COMP", "SUSHI", "1INCH", "PENDLE", "DYDX", "GMX", "RUNE", "JUP", "RAY"],
+    "gaming_metaverse": ["SAND", "MANA", "AXS", "GALA", "IMX", "ENJ", "APE", "ILV", "MAGIC", "PIXEL", "RONIN"],
+    "oracle_infra": ["LINK", "GRT", "RENDER", "AR", "FIL", "OCEAN", "AKT", "TAO"],
+    "exchange_token": ["BNB", "OKB", "CRO", "GT", "KCS", "FTT"],
+    "meme": ["DOGE", "SHIB", "PEPE", "FLOKI", "BONK", "WIF", "MEME", "BOME", "FARTCOIN"],
+    "stablecoin_excluded": ["USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD", "USDP"]
+  },
+  "default_sector": "unknown"
+}

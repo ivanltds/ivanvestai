@@ -7,6 +7,7 @@ os ciclos.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -22,8 +23,8 @@ logger = logging.getLogger("ivanvestai.main")
 async def process_pending_commands() -> None:
     """Roda com mais frequência que o ciclo principal, pra ações urgentes
     do dashboard (ex: kill switch) não esperarem até 15 min."""
-    from bot.db.models import Position
-    from bot.db.session import get_session
+    from db.models import Position
+    from db.session import get_session
 
     commands = redis_bridge.drain_commands()
     if not commands:
@@ -50,7 +51,7 @@ async def process_pending_commands() -> None:
 
 
 def _upsert_setting(session, key: str, value: str) -> None:
-    from bot.db.models import Setting
+    from db.models import Setting
 
     row = session.get(Setting, key)
     if row:
@@ -61,10 +62,18 @@ def _upsert_setting(session, key: str, value: str) -> None:
 
 def main() -> None:
     config = load_runtime_config()
-    scheduler = AsyncIOScheduler(timezone=config and "America/Sao_Paulo")
+    scheduler = AsyncIOScheduler(timezone="America/Sao_Paulo")
 
+    # `next_run_time=None` no APScheduler NÃO dispara já na largada -- na
+    # verdade faz o oposto: adiciona o job PAUSADO (só roda depois de um
+    # scheduler.resume_job() explícito, que este código nunca chamava). Bug
+    # achado em 16/09/2026 rodando o main.py pela primeira vez: o processo
+    # ficava de pé, consumindo comandos normalmente, mas o run_cycle nunca
+    # disparava sozinho -- nem na largada, nem no intervalo. Corrigido
+    # passando o "agora" de verdade, que é o comportamento que o comentário
+    # original já descrevia (dispara já, depois a cada N min).
     scheduler.add_job(run_cycle, "interval", minutes=config.cycle_interval_minutes, id="committee_cycle",
-                       next_run_time=None)  # dispara já na largada também
+                       next_run_time=dt.datetime.now(dt.timezone.utc))
     scheduler.add_job(process_pending_commands, "interval", seconds=15, id="command_drain")
 
     scheduler.start()

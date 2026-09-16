@@ -370,18 +370,24 @@ def _manage_open_positions() -> None:
         # não settings.dry_run atual; este try/except é a rede de segurança
         # extra pra qualquer outra falha de venda, real ou não).
         try:
+            # Tag [SIMULADA]/[REAL] no log de saída usa position.is_paper (a
+            # mesma fonte de verdade do fix da seção 9.14), não settings.dry_run
+            # atual -- os dois podem divergir numa carteira com posições
+            # abertas em regimes diferentes.
+            tag = "SIMULADA (paper)" if position.is_paper else "REAL"
+
             if position.sell_flag == "immediate":
                 execution_agent.sell_position(position, reason="manual_flag", immediate=True)
-                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (flag manual)", positive=True)
+                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (flag manual)  [{tag}]", positive=True)
                 continue
 
             if position.stop_price and current_price <= position.stop_price:
                 execution_agent.sell_position(position, reason="stop_loss", immediate=True)
-                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🛑 stop loss)", positive=False)
+                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🛑 stop loss)  [{tag}]", positive=False)
                 continue
             if position.take_price and current_price >= position.take_price:
                 execution_agent.sell_position(position, reason="take_profit", immediate=True)
-                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🎉 take profit)", positive=True)
+                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🎉 take profit)  [{tag}]", positive=True)
                 continue
 
             execution_agent.update_trailing_stop(position, current_price)

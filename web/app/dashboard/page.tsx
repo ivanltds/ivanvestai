@@ -2,9 +2,11 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { query } from "@/lib/db";
 import { getCached } from "@/lib/redis";
-import { formatMoney, resolveDisplayCurrency } from "@/lib/fx";
+import { resolveDisplayCurrencyPreference } from "@/lib/fx";
 import KillSwitch from "./kill-switch";
 import WalletGrid from "./wallet-grid";
+import { CurrencyProvider } from "./currency-context";
+import Money, { CurrencyUnavailableNotice } from "./money";
 
 interface Position {
   id: string;
@@ -38,12 +40,14 @@ export default async function DashboardPage() {
   const cachedBalance = await getCached<{ total_equity_usdt: number }>("balance");
 
   // Moeda de exibição escolhida em /settings (BRL é o default -- muda pra
-  // USDT lá). Cotação USDT->BRL vem da Binance (lib/fx.ts); se a Binance
-  // estiver fora, cai pra USDT em vez de mostrar conversão errada.
+  // USDT lá). A cotação USDT->BRL em si é buscada no CLIENT (ver
+  // currency-context.tsx) -- buscar aqui no servidor batia no bloqueio
+  // geográfico da Binance pra IPs dos EUA (região padrão da função
+  // serverless da Vercel). Aqui só decide qual moeda mostrar.
   const currencySetting = await query<{ value: string }>(
     `select value from settings where key = 'display_currency' limit 1`
   );
-  const { currency, brlRate } = await resolveDisplayCurrency(currencySetting[0]?.value);
+  const currency = resolveDisplayCurrencyPreference(currencySetting[0]?.value);
 
   // is_paper = false é essencial aqui: com o dry-run (arquitetura-tecnica.md
   // 9.6), positions/trades também recebem registros SIMULADOS (is_paper=true)
@@ -87,73 +91,71 @@ export default async function DashboardPage() {
   const totalEquity = cachedBalance?.total_equity_usdt ?? walletTotal;
 
   return (
-    <div>
-      <div className="grid grid-2">
-        <div className="card">
-          <div style={{ color: "var(--muted)", fontSize: 13 }}>Balanço geral</div>
-          <div style={{ fontSize: 28, fontWeight: 700 }}>
-            {formatMoney(totalEquity, currency, brlRate)}
+    <CurrencyProvider currency={currency}>
+      <div>
+        <div className="grid grid-2">
+          <div className="card">
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>Balanço geral</div>
+            <div style={{ fontSize: 28, fontWeight: 700 }}>
+              <Money usdt={totalEquity} />
+            </div>
+            <CurrencyUnavailableNotice />
+            {!cachedBalance && walletAsOf && (
+              <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
+                último snapshot: {new Date(walletAsOf).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}
+              </div>
+            )}
           </div>
-          {currency === "BRL" && !brlRate && (
-            <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
-              cotação BRL indisponível agora -- mostrando USDT
-            </div>
-          )}
-          {!cachedBalance && walletAsOf && (
-            <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
-              último snapshot: {new Date(walletAsOf).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}
-            </div>
-          )}
+          <div className="card">
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>Status do bot</div>
+            <KillSwitch />
+          </div>
         </div>
-        <div className="card">
-          <div style={{ color: "var(--muted)", fontSize: 13 }}>Status do bot</div>
-          <KillSwitch />
-        </div>
-      </div>
 
-      <div className="card">
-        <h2 style={{ fontSize: 16 }}>Carteira na Binance</h2>
-        {walletRows.length === 0 && (
-          <p style={{ color: "var(--muted)" }}>
-            Nenhum snapshot ainda -- roda o PortfolioAgent (parte de um ciclo do bot) pra popular.
+        <div className="card">
+          <h2 style={{ fontSize: 16 }}>Carteira na Binance</h2>
+          {walletRows.length === 0 && (
+            <p style={{ color: "var(--muted)" }}>
+              Nenhum snapshot ainda -- roda o PortfolioAgent (parte de um ciclo do bot) pra popular.
+            </p>
+          )}
+          {walletRows.length > 0 && (
+            <WalletGrid
+              rows={walletRows.map((r) => ({
+                asset: r.asset,
+                quantity: r.quantity,
+                valueUsdt: r.value_usdt,
+              }))}
+            />
+          )}
+        </div>
+
+        <div className="card">
+          <h2 style={{ fontSize: 16 }}>Posições abertas pelo bot</h2>
+          <p style={{ color: "var(--muted)", fontSize: 12 }}>
+            Só operações que o bot executou de fato (com stop/take definidos) — não é a carteira toda.
           </p>
-        )}
-        {walletRows.length > 0 && (
-          <WalletGrid
-            rows={walletRows.map((r) => ({
-              asset: r.asset,
-              quantity: r.quantity,
-              formattedValue: formatMoney(r.value_usdt, currency, brlRate),
-            }))}
-          />
-        )}
-      </div>
+          {openPositions.length === 0 && <p style={{ color: "var(--muted)" }}>Nenhuma posição aberta pelo bot.</p>}
+          {openPositions.map((p) => (
+            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid var(--border)" }}>
+              <span>{p.pair}</span>
+              <span>{p.quantity} @ <Money usdt={p.avg_entry_price} /></span>
+            </div>
+          ))}
+        </div>
 
-      <div className="card">
-        <h2 style={{ fontSize: 16 }}>Posições abertas pelo bot</h2>
-        <p style={{ color: "var(--muted)", fontSize: 12 }}>
-          Só operações que o bot executou de fato (com stop/take definidos) — não é a carteira toda.
-        </p>
-        {openPositions.length === 0 && <p style={{ color: "var(--muted)" }}>Nenhuma posição aberta pelo bot.</p>}
-        {openPositions.map((p) => (
-          <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid var(--border)" }}>
-            <span>{p.pair}</span>
-            <span>{p.quantity} @ {formatMoney(p.avg_entry_price, currency, brlRate)}</span>
-          </div>
-        ))}
+        <div className="card">
+          <h2 style={{ fontSize: 16 }}>Operações de hoje</h2>
+          {todayTrades.length === 0 && <p style={{ color: "var(--muted)" }}>Nenhuma operação hoje.</p>}
+          {todayTrades.map((t) => (
+            <div key={t.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid var(--border)" }}>
+              <span>{t.pair} — {t.side.toUpperCase()}</span>
+              <span>{t.quantity} @ <Money usdt={t.price} /></span>
+            </div>
+          ))}
+          <a href="/api/export/trades" style={{ fontSize: 13 }}>Exportar CSV</a>
+        </div>
       </div>
-
-      <div className="card">
-        <h2 style={{ fontSize: 16 }}>Operações de hoje</h2>
-        {todayTrades.length === 0 && <p style={{ color: "var(--muted)" }}>Nenhuma operação hoje.</p>}
-        {todayTrades.map((t) => (
-          <div key={t.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid var(--border)" }}>
-            <span>{t.pair} — {t.side.toUpperCase()}</span>
-            <span>{t.quantity} @ {formatMoney(t.price, currency, brlRate)}</span>
-          </div>
-        ))}
-        <a href="/api/export/trades" style={{ fontSize: 13 }}>Exportar CSV</a>
-      </div>
-    </div>
+    </CurrencyProvider>
   );
 }

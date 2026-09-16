@@ -5,11 +5,12 @@
 // genérico usa onError -- Server Component não consegue anexar handler de
 // evento a elemento nenhum.
 import { coinIconUrl, GENERIC_COIN_ICON } from "@/lib/coin-icon";
+import Money from "./money";
 
 interface WalletGridRow {
   asset: string;
   quantity: number;
-  formattedValue: string;
+  valueUsdt: number;
 }
 
 export default function WalletGrid({ rows }: { rows: WalletGridRow[] }) {
@@ -51,7 +52,7 @@ export default function WalletGrid({ rows }: { rows: WalletGridRow[] }) {
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>{r.asset}</div>
             <div style={{ fontSize: 12, color: "var(--muted)" }}>{r.quantity}</div>
-            <div style={{ fontSize: 13 }}>{r.formattedValue}</div>
+            <div style={{ fontSize: 13 }}><Money usdt={r.valueUsdt} /></div>
           </div>
         </div>
       ))}

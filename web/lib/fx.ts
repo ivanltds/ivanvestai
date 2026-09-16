@@ -38,11 +38,25 @@ export async function getUsdtBrlRate(): Promise<number | null> {
 
 export type DisplayCurrency = "BRL" | "USDT";
 
+/** Só lê a preferência salva em /settings -- não busca cotação (isso é feito
+ * no client agora, ver dashboard/currency-context.tsx). Uso: decidir no
+ * servidor qual moeda mostrar, sem tentar falar com a Binance a partir da
+ * função serverless da Vercel. */
+export function resolveDisplayCurrencyPreference(raw: string | undefined): DisplayCurrency {
+  return raw === "USDT" ? "USDT" : "BRL"; // BRL é o default
+}
+
+/** @deprecated a busca da cotação (fetch pra Binance) foi movida pro client
+ * -- ver dashboard/currency-context.tsx. Achado em 16/09/2026: rodando no
+ * servidor (função serverless da Vercel, região padrão nos EUA), a Binance
+ * bloqueia com 451 (Unavailable For Legal Reasons) por vir de IP dos EUA.
+ * No navegador do Ivan (Brasil) isso não acontece. Mantido só pra não
+ * quebrar quem ainda importa isso. */
 export async function resolveDisplayCurrency(raw: string | undefined): Promise<{
   currency: DisplayCurrency;
   brlRate: number | null;
 }> {
-  const currency: DisplayCurrency = raw === "USDT" ? "USDT" : "BRL"; // BRL é o default
+  const currency = resolveDisplayCurrencyPreference(raw);
   const brlRate = currency === "BRL" ? await getUsdtBrlRate() : null;
   return { currency, brlRate };
 }

@@ -9,7 +9,8 @@ from agents.base import BaseAgent
 from agents.market_scanner_agent import ScannerOpportunity
 from config.settings import settings
 from core.binance_client import binance_client
-from core.risk_rules import correlation_ok, max_allocation_ok, rolling_correlation, sector_of
+from core.indicators import rolling_correlation
+from core.risk_rules import correlation_ok, max_allocation_ok, sector_of
 from db.models import Position
 
 

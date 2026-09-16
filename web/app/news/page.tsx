@@ -23,10 +23,13 @@ export default async function NewsPage() {
   return (
     <div>
       <h1 style={{ fontSize: 20 }}>Feed de notícias</h1>
+      {items.length === 0 && <p style={{ color: "var(--muted)" }}>Nenhuma notícia coletada ainda.</p>}
       {items.map((item) => (
         <div key={item.id} className="card">
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "var(--muted)" }}>
-            <span>{item.source}</span>
+            <span>
+              {item.source} — {new Date(item.timestamp).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}
+            </span>
             <span className={item.sentiment_score >= 0 ? "positive" : "negative"}>
               {item.sentiment_score >= 0 ? "+" : ""}{item.sentiment_score.toFixed(2)}
             </span>

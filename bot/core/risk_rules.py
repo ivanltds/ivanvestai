@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from dataclasses import dataclass
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from config.settings import settings
@@ -37,6 +39,23 @@ def max_allocation_ok(order_value: float, total_equity: float, max_pct: float) -
     if total_equity <= 0:
         return False
     return (order_value / total_equity) <= max_pct
+
+
+def round_step_size(quantity: float, step_size: float) -> float:
+    """Arredonda `quantity` PRA BAIXO pro múltiplo válido do filtro LOT_SIZE
+    da Binance (`stepSize`) -- obrigatório pra Binance aceitar a ordem.
+    Arredondar pra baixo (nunca pra cima) garante que a ordem nunca peça mais
+    do que o valor calculado (evita erro de saldo insuficiente pela sobra do
+    arredondamento). Bug corrigido nesta revisão: antes, nenhum lugar do
+    código fazia esse ajuste -- ver arquitetura-tecnica.md 9.6."""
+    if step_size <= 0 or quantity <= 0:
+        return max(quantity, 0.0)
+    steps = math.floor(quantity / step_size)
+    rounded = steps * step_size
+    # elimina ruído de ponto flutuante (ex: 0.30000000000000004) usando a
+    # quantidade de casas decimais do próprio step_size como referência
+    decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
+    return round(rounded, decimals)
 
 
 def correlation_ok(correlation_with_open_position: float, threshold: float = 0.75) -> bool:

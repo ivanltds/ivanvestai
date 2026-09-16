@@ -21,10 +21,13 @@ export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get("from");
   const to = req.nextUrl.searchParams.get("to");
 
+  // is_paper = false: exportação é pra uso real (ex: declaração de IR) --
+  // nunca deve incluir trades simulados do dry-run (ver arquitetura-tecnica.md 9.6).
   const rows = await query<TradeRow>(
     `select timestamp, pair, side, order_type, quantity, price, fee, fee_asset, reason
      from trades
-     where ($1::timestamptz is null or timestamp >= $1)
+     where is_paper = false
+       and ($1::timestamptz is null or timestamp >= $1)
        and ($2::timestamptz is null or timestamp <= $2)
      order by timestamp desc`,
     [from, to]

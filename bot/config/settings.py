@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_claims_email: str = "mailto:ivanltds@gmail.com"
 
+    # Segurança de capital: enquanto True (padrão), o ExecutionAgent NUNCA chama
+    # place_market_order/place_limit_order -- simula o fill pelo preço atual e
+    # marca Position/Trade com is_paper=True. De propósito, NÃO é sobrescrito
+    # pela tabela `settings` (nada de comando remoto do dashboard consegue
+    # ligar/desligar isso) -- só muda com uma edição manual do .env local,
+    # deliberadamente mais difícil de fazer sem querer.
+    dry_run: bool = True
+
     # Parâmetros operacionais (defaults — sobrescritos pela tabela settings quando presentes)
     cycle_interval_minutes: int = 15
     entry_decision_timeout_seconds: int = 45

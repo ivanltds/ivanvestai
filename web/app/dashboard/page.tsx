@@ -27,13 +27,18 @@ export default async function DashboardPage() {
 
   const cachedBalance = await getCached<{ total_equity_usdt: number }>("balance");
 
+  // is_paper = false é essencial aqui: com o dry-run (arquitetura-tecnica.md
+  // 9.6), positions/trades também recebem registros SIMULADOS (is_paper=true)
+  // quando run_cycle_once.py é usado pra testar a orquestração real. Esse
+  // dashboard mostra só operação de capital real -- nunca misturar.
   const openPositions = await query<Position>(
-    `select id, pair, quantity, avg_entry_price, status from positions where status = 'open' order by opened_at desc`
+    `select id, pair, quantity, avg_entry_price, status from positions
+     where status = 'open' and is_paper = false order by opened_at desc`
   );
 
   const todayTrades = await query<Trade>(
     `select id, pair, side, quantity, price, timestamp from trades
-     where timestamp >= date_trunc('day', now()) order by timestamp desc limit 50`
+     where timestamp >= date_trunc('day', now()) and is_paper = false order by timestamp desc limit 50`
   );
 
   const totalEquity = cachedBalance?.total_equity_usdt ?? 0;

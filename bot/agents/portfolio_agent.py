@@ -12,6 +12,28 @@ class PortfolioAgent(BaseAgent):
     name = "portfolio_agent"
     model = ""  # agente determinístico — não usa LLM
 
+    def _avg_buy_price(self, asset: str) -> float | None:
+        """Preço médio de compra real, via histórico de execuções
+        (`get_my_trades`) -- corrigido nesta revisão (era `None` sempre, ver
+        arquitetura-tecnica.md 9.3/9.6). Simplificação MVP assumida: média
+        ponderada só dos lados de COMPRA (não faz FIFO nem desconta o que já
+        foi vendido) -- correto se a posição nunca teve venda parcial, o que
+        é o caso de uma carteira pequena que nunca operou de verdade; se um
+        dia houver vendas parciais no meio do histórico, isso deixa de ser
+        exatamente o custo contábil restante."""
+        symbol = f"{asset}{settings.safety_stablecoin}"
+        try:
+            trades = binance_client.get_my_trades(symbol)
+        except Exception:
+            return None
+
+        buys = [t for t in trades if t.get("isBuyer")]
+        total_qty = sum(float(t["qty"]) for t in buys)
+        if total_qty <= 0:
+            return None
+        total_cost = sum(float(t["qty"]) * float(t["price"]) for t in buys)
+        return total_cost / total_qty
+
     def run(self) -> list[WalletSnapshot]:
         balances = binance_client.get_account_balances()
         snapshots: list[WalletSnapshot] = []
@@ -24,19 +46,12 @@ class PortfolioAgent(BaseAgent):
                     value_usdt = quantity
                     avg_buy_price = None
                 else:
-                    # Preço médio de compra viria idealmente do histórico de trades
-                    # (my_trades da Binance); aqui usamos o último preço como
-                    # aproximação de valor de mercado — refinar com histórico real.
+                    avg_buy_price = self._avg_buy_price(asset)
                     try:
-                        price = float(
-                            binance_client._client.get_symbol_ticker(  # noqa: SLF001 — wrapper fino, ok no MVP
-                                symbol=f"{asset}{settings.safety_stablecoin}"
-                            )["price"]
-                        )
+                        price = binance_client.get_last_price(f"{asset}{settings.safety_stablecoin}")
                     except Exception:
-                        price = 0.0
+                        price = avg_buy_price or 0.0
                     value_usdt = quantity * price
-                    avg_buy_price = None  # TODO: calcular via get_my_trades() histórico
 
                 snapshot = WalletSnapshot(
                     asset=asset,

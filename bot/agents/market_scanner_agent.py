@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from agents.base import BaseAgent
 from config.settings import settings
 from core.binance_client import binance_client
+from core import vlog
 from core.indicators import (
     confluence_score,
     market_regime,
@@ -36,6 +37,7 @@ class MarketScannerAgent(BaseAgent):
             quote=settings.safety_stablecoin, top_n=settings.top_n_pairs
         )
         opportunities: list[ScannerOpportunity] = []
+        skipped = 0
 
         for pair in pairs:
             base_asset = pair.removesuffix(settings.safety_stablecoin)
@@ -46,26 +48,36 @@ class MarketScannerAgent(BaseAgent):
                 df_4h = binance_client.get_klines_df(pair, "4h", limit=120)
                 df_1h = binance_client.get_klines_df(pair, "1h", limit=120)
                 df_15m = binance_client.get_klines_df(pair, "15m", limit=120)
+
+                regime = market_regime(df_4h)
+
+                if regime == "trend":
+                    votes = score_trend_following(df_1h, df_15m)
+                    strategy = "trend_following"
+                else:
+                    votes = score_mean_reversion(df_15m)
+                    strategy = "mean_reversion"
+
+                # Breakout é avaliado em paralelo independente do regime —
+                # um rompimento pode ocorrer mesmo saindo de lateralização.
+                breakout_votes = score_breakout(df_15m)
+                if confluence_score(breakout_votes) >= 2:
+                    votes = breakout_votes
+                    strategy = "breakout"
+
+                score = confluence_score(votes)
             except Exception:
-                continue  # par sem histórico suficiente ou erro de API — pula neste ciclo
+                # Par sem histórico suficiente (ex: listagem recente -- ADX(14) e
+                # outros indicadores do pandas_ta retornam None silenciosamente,
+                # sem levantar exceção, quando não há candles suficientes pra
+                # calcular; ver core/indicators.py) ou erro de API -- pula este
+                # par neste ciclo. Bug encontrado nesta revisão (16/09/2026): antes
+                # só a busca de klines tinha essa proteção, então um par assim
+                # derrubava o ciclo inteiro em vez de só ser ignorado, que já era
+                # a intenção original do comentário aqui.
+                skipped += 1
+                continue
 
-            regime = market_regime(df_4h)
-
-            if regime == "trend":
-                votes = score_trend_following(df_1h, df_15m)
-                strategy = "trend_following"
-            else:
-                votes = score_mean_reversion(df_15m)
-                strategy = "mean_reversion"
-
-            # Breakout é avaliado em paralelo independente do regime —
-            # um rompimento pode ocorrer mesmo saindo de lateralização.
-            breakout_votes = score_breakout(df_15m)
-            if confluence_score(breakout_votes) >= 2:
-                votes = breakout_votes
-                strategy = "breakout"
-
-            score = confluence_score(votes)
             if score >= 2:
                 opportunities.append(
                     ScannerOpportunity(
@@ -76,5 +88,8 @@ class MarketScannerAgent(BaseAgent):
                         votes_summary={v.name: {"vote": v.vote, "value": v.value} for v in votes},
                     )
                 )
+
+        if skipped:
+            vlog.warn(f"MarketScannerAgent: {skipped} par(es) pulado(s) (histórico insuficiente ou erro de API).")
 
         return opportunities

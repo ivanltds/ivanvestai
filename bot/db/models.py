@@ -137,6 +137,7 @@ class Position(Base):
     rebuy_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     opened_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now())
     closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_paper: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # True = simulado (settings.dry_run) -- nunca é capital real
 
 
 class Trade(Base):
@@ -153,6 +154,7 @@ class Trade(Base):
     fee_asset: Mapped[str] = mapped_column(String, default="BNB")
     reason: Mapped[str] = mapped_column(String, nullable=False)  # committee|manual_flag|manual_dashboard
     timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    is_paper: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # True = simulado (settings.dry_run) -- nunca é capital real
 
 
 class DailyEquity(Base):
@@ -161,6 +163,28 @@ class DailyEquity(Base):
     date: Mapped[dt.date] = mapped_column(primary_key=True)
     equity_brl: Mapped[float] = mapped_column(Float, nullable=False)
     equity_usdt: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class PaperTrade(Base):
+    """Trades SIMULADOS do paper trading ao vivo (run_paper_trading.py, ver
+    arquitetura-tecnica.md 9.5/9.6) -- nunca envolvem ordem real na Binance
+    nem saldo real. Tabela separada de `trades`/`positions` (reservadas para
+    operação com capital real) de propósito, pra nunca confundir uma
+    simulação com uma operação de verdade -- inclusive visualmente no
+    dashboard (página /paper-trading em vez de /dashboard)."""
+
+    __tablename__ = "paper_trades"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    strategy: Mapped[str] = mapped_column(String, nullable=False, index=True)  # committee|kotegawa|rapf_filtros|rapf_sem_filtros
+    symbol: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    event: Mapped[str] = mapped_column(String, nullable=False)  # entry|exit
+    direction: Mapped[str] = mapped_column(String, nullable=False)  # long (spot-only, ver notas nos backtests)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)  # stop_loss|take_profit -- só em exit
+    pnl_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # só em exit
+    extra_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class ApiCostLog(Base):

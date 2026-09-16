@@ -13,6 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <nav className="topnav">
           <Link href="/dashboard">Dashboard</Link>
+          <Link href="/paper-trading">Paper Trading</Link>
           <Link href="/news">Notícias</Link>
           <Link href="/settings">Configurações</Link>
         </nav>

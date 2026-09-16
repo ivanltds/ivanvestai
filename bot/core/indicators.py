@@ -33,11 +33,17 @@ def _col(df: pd.DataFrame, prefix: str) -> pd.Series:
     return df[matches[0]]
 
 
+def adx_last(df: pd.DataFrame) -> float:
+    """ADX(14) mais recente do timeframe passado -- extraído do market_regime
+    pra permitir logar o valor bruto (ex: no diagnóstico do backtest) sem
+    recalcular duas vezes nem duplicar a lógica de leitura de coluna."""
+    adx = ta.adx(df["high"], df["low"], df["close"])
+    return float(_col(adx, "ADX_").iloc[-1])
+
+
 def market_regime(df_4h: pd.DataFrame) -> str:
     """Classifica o regime de mercado no timeframe maior: trend | lateral."""
-    adx = ta.adx(df_4h["high"], df_4h["low"], df_4h["close"])
-    last_adx = float(_col(adx, "ADX_").iloc[-1])
-    return "trend" if last_adx > 25 else "lateral"
+    return "trend" if adx_last(df_4h) > 25 else "lateral"
 
 
 # --- Trend following ---------------------------------------------------

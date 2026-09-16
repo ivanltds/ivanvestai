@@ -21,6 +21,12 @@ web/.vercel
 web/tsconfig.tsbuildinfo
 npm-debug.log*
 
+# Dados gerados pelo bot (backtest/paper trading) -- não é código-fonte,
+# muda a cada execução, não deve ir pro repositório (ver arquitetura-tecnica.md 9.7)
+bot/backtest_trades*.csv
+bot/paper_trades.csv
+bot/paper_trading_state.json
+
 # OS
 .DS_Store
 Thumbs.db

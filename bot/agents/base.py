@@ -21,5 +21,14 @@ class BaseAgent:
     model: str = ""
 
     def __init__(self) -> None:
-        if not self.name or not self.model:
-            raise NotImplementedError("Subclasses devem definir `name` e `model`.")
+        # `model = ""` é um valor válido e deliberado: marca um agente
+        # determinístico sem LLM (execution_agent, market_scanner_agent,
+        # portfolio_agent, portfolio_comparison_agent -- ver comentários em
+        # cada um). Só `name` vazio é erro de verdade (agente sem identidade
+        # definida). Bug encontrado nesta revisão: a checagem original
+        # (`not self.model`) tratava "" como "não definido" e quebrava
+        # justamente os agentes determinísticos -- nunca tinha aparecido
+        # porque nenhum deles tinha sido instanciado de fato até o primeiro
+        # dry-run completo (ver arquitetura-tecnica.md 9.6/9.7).
+        if not self.name:
+            raise NotImplementedError("Subclasses devem definir `name`.")

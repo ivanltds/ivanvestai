@@ -9,9 +9,37 @@ import datetime as dt
 
 import pandas as pd
 from binance.client import Client
+from binance.exceptions import BinanceAPIException
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings
+
+# Dicas amigáveis pros códigos de erro da Binance mais comuns de aparecer
+# na primeira vez que uma chamada ASSINADA (signed) roda -- get_last_price/
+# get_klines_df são endpoints públicos e não passam por aqui, então
+# get_account_balances() costuma ser a primeira chance real de a config
+# da API key ser testada (achado em 16/09/2026, ver arquitetura-tecnica.md).
+_BINANCE_ERROR_HINTS: dict[int, str] = {
+    -2015: (
+        "Erro -2015 (chave/IP/permissão inválidos) -- não é bug de código, é config da "
+        "conta/chave na Binance. Confira, nessa ordem de probabilidade:\n"
+        "      1) Restrição de IP da API key (Binance > API Management) não inclui o IP "
+        "público atual desta máquina.\n"
+        "      2) A permissão 'Enable Reading' está desmarcada nessa key.\n"
+        "      3) BINANCE_API_KEY/BINANCE_API_SECRET no .env não batem com essa key "
+        "(espaço extra, key revogada/regenerada, ou mainnet/testnet trocados).\n"
+        "      https://www.binance.com/en/my/settings/api-management"
+    ),
+    -1021: (
+        "Erro -1021 (timestamp fora da janela) -- o relógio deste computador está "
+        "dessincronizado com o servidor da Binance. No Windows: Configurações > Hora e "
+        "idioma > Data e hora > 'Sincronizar agora'."
+    ),
+}
+
+
+def _hint_for(exc: BinanceAPIException) -> str | None:
+    return _BINANCE_ERROR_HINTS.get(exc.code)
 
 _KLINE_COLUMNS = [
     "open_time", "open", "high", "low", "close", "volume",
@@ -19,7 +47,7 @@ _KLINE_COLUMNS = [
     "taker_buy_base", "taker_buy_quote", "ignore",
 ]
 
-_INTERVAL_MINUTES = {"15m": 15, "1h": 60, "4h": 240}
+_INTERVAL_MINUTES = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080}
 
 
 class BinanceClient:
@@ -29,7 +57,13 @@ class BinanceClient:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_account_balances(self) -> list[dict]:
         """Saldos != 0 da subconta (spot)."""
-        account = self._client.get_account()
+        try:
+            account = self._client.get_account()
+        except BinanceAPIException as exc:
+            hint = _hint_for(exc)
+            if hint:
+                print(f"\n[binance_client] {hint}\n")
+            raise
         return [b for b in account["balances"] if float(b["free"]) + float(b["locked"]) > 0]
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
@@ -72,6 +106,21 @@ class BinanceClient:
             df[col] = df[col].astype(float)
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
         return df
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_last_price(self, symbol: str) -> float:
+        """Preço atual (ticker) -- usado pelo paper trading (run_paper_trading.py)
+        pra gerir stop/take de posições simuladas em tempo real, sem precisar
+        esperar o fechamento do próximo candle. Só leitura, nenhuma ordem."""
+        ticker = self._client.get_symbol_ticker(symbol=symbol)
+        return float(ticker["price"])
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_my_trades(self, symbol: str) -> list[dict]:
+        """Histórico de execuções da subconta nesse par -- usado pelo
+        PortfolioAgent pra calcular o preço médio de compra real, em vez de
+        aproximar pelo preço atual (ver arquitetura-tecnica.md 9.3/9.6)."""
+        return self._client.get_my_trades(symbol=symbol)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_symbol_filters(self, symbol: str) -> dict:

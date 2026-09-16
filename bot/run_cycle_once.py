@@ -30,11 +30,21 @@ rodar e devolve pra "paused" depois, inclusive se der erro no meio.
 
 Uso:
     python run_cycle_once.py
+    python run_cycle_once.py --ignore-macro-window   # ver aviso abaixo
+
+--ignore-macro-window: pula a checagem de janela de risco macro (FOMC/CPI,
+core/risk_rules.in_macro_risk_window) só pra ESTE teste manual, pra poder
+validar a fase do comitê (ViabilityAgent/PortfolioComparisonAgent/
+RiskCommitteeAgent/ExecutionAgent) sem esperar a janela liberar sozinha.
+NÃO afeta a segurança de capital -- isso continua 100% governado por
+settings.dry_run (abaixo). O scheduler automático (main.py) nunca usa essa
+flag -- só existe aqui, pra teste manual explícito.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from config.settings import settings
 from core import vlog
@@ -44,7 +54,7 @@ from orchestrator.cycle_runner import run_cycle
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-SCRIPT_VERSION = "2026-09-16-v2-vlog"
+SCRIPT_VERSION = "2026-09-16-v3-ignore-macro-window"
 
 
 def _set_bot_status(value: str) -> None:
@@ -57,6 +67,7 @@ def _set_bot_status(value: str) -> None:
 
 
 def main() -> None:
+    ignore_macro_window = "--ignore-macro-window" in sys.argv
     print(f"[run_cycle_once.py versão: {SCRIPT_VERSION}]")
     if settings.dry_run:
         vlog.ok("dry_run = True -- seguro, nenhuma ordem real será enviada à Binance.")
@@ -67,9 +78,12 @@ def main() -> None:
             print("Cancelado.")
             return
 
+    if ignore_macro_window:
+        vlog.warn("--ignore-macro-window: a janela de risco macro (FOMC/CPI) será IGNORADA neste teste manual.")
+
     _set_bot_status("running")
     try:
-        asyncio.run(run_cycle())
+        asyncio.run(run_cycle(ignore_macro_window=ignore_macro_window))
         vlog.ok("Ciclo concluído sem exceções.")
         print("  Confira no Postgres (ou no dashboard, com uma query manual filtrando is_paper=true):")
         print("  opportunities, committee_decisions, positions/trades (is_paper=true).")

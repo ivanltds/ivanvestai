@@ -8,7 +8,21 @@ SEGURANÇA (dry-run, ver arquitetura-tecnica.md 9.6): enquanto
 `is_paper=True`, pra nunca ficar indistinguível de uma operação com capital
 real no Postgres/dashboard. Só quando `settings.dry_run=False` (mudança
 manual no `.env`, nunca via comando remoto do dashboard, de propósito) é que
-ordens de verdade saem daqui."""
+ordens de verdade saem daqui.
+
+IMPORTANTE (achado em 16/09/2026, ver arquitetura-tecnica.md 9.14): pra
+ABRIR posição nova (`open_position`) e pra vender direto da carteira
+(`sell_wallet_asset`), é correto usar `settings.dry_run` ATUAL -- é uma
+decisão sendo tomada agora. Mas pra FECHAR uma posição já existente
+(`sell_position`), o que importa é se AQUELA posição foi aberta em paper ou
+não (`position.is_paper`) -- nunca o `settings.dry_run` atual. Se o Ivan
+liga o bot em dry_run=True, acumula posições simuladas (nenhum ativo real
+comprado), e depois desliga o dry_run, essas posições simuladas continuam
+abertas e precisam continuar sendo fechadas em simulação quando baterem
+stop/take -- do contrário o bot tenta vender na Binance de verdade um
+ativo que nunca foi comprado de verdade, o que ou falha com -2010
+(insufficient balance) ou, pior, vende um ativo real que por acaso exista
+na carteira sem relação nenhuma com a posição simulada."""
 from __future__ import annotations
 
 import datetime as dt
@@ -33,12 +47,17 @@ class ExecutionAgent(BaseAgent):
     def _order_type_for(self, pair: str) -> str:
         return "market" if pair in HIGH_LIQUIDITY_PAIRS else "limit"
 
-    def _fill_price(self, pair: str, side: str, quantity: float, order_type: str) -> float:
+    def _fill_price(self, pair: str, side: str, quantity: float, order_type: str, is_paper: bool) -> float:
         """Preço de preenchimento. Em dry-run é sempre o ticker atual
         (simulado -- nenhuma ordem é enviada). Em modo real, é o preço de
         fill reportado pela Binance, com fallback pro ticker se a resposta
-        não trouxer `fills` (ex: alguns tipos de ordem limit)."""
-        if settings.dry_run:
+        não trouxer `fills` (ex: alguns tipos de ordem limit).
+
+        `is_paper` é decidido por quem chama -- `settings.dry_run` atual pra
+        uma decisão nova (abrir posição, vender direto da carteira), ou o
+        `is_paper` da própria posição pra fechar uma posição já existente
+        (ver docstring do módulo)."""
+        if is_paper:
             return binance_client.get_last_price(pair)
 
         if order_type == "market":
@@ -51,7 +70,7 @@ class ExecutionAgent(BaseAgent):
 
     def open_position(self, pair: str, quantity: float, decision: FinalDecision) -> Trade:
         order_type = self._order_type_for(pair)
-        fill_price = self._fill_price(pair, "BUY", quantity, order_type)
+        fill_price = self._fill_price(pair, "BUY", quantity, order_type, settings.dry_run)
 
         with get_session() as session:
             position = Position(
@@ -86,7 +105,9 @@ class ExecutionAgent(BaseAgent):
         modo 'agente otimiza o momento' — nesse caso quem chama essa função
         já é o próprio ciclo decidindo que chegou a hora de vender."""
         order_type = "market" if immediate or position.pair in HIGH_LIQUIDITY_PAIRS else "limit"
-        fill_price = self._fill_price(position.pair, "SELL", position.quantity, order_type)
+        # position.is_paper (não settings.dry_run atual) -- ver docstring do
+        # módulo e arquitetura-tecnica.md 9.14.
+        fill_price = self._fill_price(position.pair, "SELL", position.quantity, order_type, position.is_paper)
 
         with get_session() as session:
             db_position = session.get(Position, position.id)
@@ -136,7 +157,7 @@ class ExecutionAgent(BaseAgent):
                 return None
 
         order_type = self._order_type_for(pair)
-        fill_price = self._fill_price(pair, "SELL", sell_quantity, order_type)
+        fill_price = self._fill_price(pair, "SELL", sell_quantity, order_type, settings.dry_run)
 
         with get_session() as session:
             trade = Trade(

@@ -157,7 +157,20 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
 
         # --- Gestão de posições abertas (sem timeout — saída pode ser deliberada) ---
         vlog.section("Gestão de posições abertas", emoji="🛡️")
-        _manage_open_positions()
+        try:
+            _manage_open_positions()
+        except Exception:
+            # Rede de segurança extra além do try/except por posição dentro de
+            # _manage_open_positions() -- qualquer erro fora do loop (ex: falha
+            # na query inicial) não pode impedir o ciclo de terminar limpo e
+            # liberar o lock (isso já é garantido pelo finally logo abaixo,
+            # mas sem isto o traceback subiria até o apscheduler sem log
+            # nenhum daqui). Ver arquitetura-tecnica.md 9.14.
+            logger.exception("Erro inesperado gerenciando posições abertas.")
+            vlog.fail("Erro inesperado gerenciando posições abertas — ciclo será concluído mesmo assim.")
+            redis_bridge.publish_event(
+                "alerts", {"type": "cycle_error", "message": "Erro inesperado gerenciando posições abertas"}
+            )
 
         vlog.banner("🏁  CICLO CONCLUÍDO", f"ciclo {cycle_id[:8]}", color="green")
 
@@ -344,22 +357,42 @@ def _manage_open_positions() -> None:
             vlog.fail(f"Não consegui buscar o preço atual de {position.pair} — pulando gestão desta posição.")
             continue
 
-        if position.sell_flag == "immediate":
-            execution_agent.sell_position(position, reason="manual_flag", immediate=True)
-            vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (flag manual)", positive=True)
-            continue
+        # Cada posição gerenciada isoladamente -- uma venda que falha (ex:
+        # -2010 insufficient balance, -2015 permissão, erro de rede) não pode
+        # impedir a checagem de stop/take das OUTRAS posições abertas no
+        # mesmo ciclo. Achado em 16/09/2026: uma posição de teste em paper
+        # (is_paper=True, nenhum ativo real comprado) bateu take profit com
+        # dry_run já desligado e o bot tentou vender de verdade um ativo que
+        # nunca existiu na conta -- sem este try/except, isso derrubava o
+        # _manage_open_positions() inteiro no meio do loop. Ver
+        # arquitetura-tecnica.md 9.14 (causa raiz corrigida em
+        # agents/execution_agent.py -- venda agora respeita position.is_paper,
+        # não settings.dry_run atual; este try/except é a rede de segurança
+        # extra pra qualquer outra falha de venda, real ou não).
+        try:
+            if position.sell_flag == "immediate":
+                execution_agent.sell_position(position, reason="manual_flag", immediate=True)
+                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (flag manual)", positive=True)
+                continue
 
-        if position.stop_price and current_price <= position.stop_price:
-            execution_agent.sell_position(position, reason="stop_loss", immediate=True)
-            vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🛑 stop loss)", positive=False)
-            continue
-        if position.take_price and current_price >= position.take_price:
-            execution_agent.sell_position(position, reason="take_profit", immediate=True)
-            vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🎉 take profit)", positive=True)
-            continue
+            if position.stop_price and current_price <= position.stop_price:
+                execution_agent.sell_position(position, reason="stop_loss", immediate=True)
+                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🛑 stop loss)", positive=False)
+                continue
+            if position.take_price and current_price >= position.take_price:
+                execution_agent.sell_position(position, reason="take_profit", immediate=True)
+                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🎉 take profit)", positive=True)
+                continue
 
-        execution_agent.update_trailing_stop(position, current_price)
-        vlog.step("👀", position.pair, f"seguindo aberta @ ~${current_price:,.4f}, sem gatilho de saída.")
+            execution_agent.update_trailing_stop(position, current_price)
+            vlog.step("👀", position.pair, f"seguindo aberta @ ~${current_price:,.4f}, sem gatilho de saída.")
+        except Exception as exc:
+            logger.error("Falha ao gerenciar posição %s (id=%s): %s", position.pair, position.id, exc)
+            vlog.fail(f"Falha ao gerenciar {position.pair}: {exc} — posição mantida, seguindo pras outras.")
+            redis_bridge.publish_event(
+                "alerts", {"type": "position_management_error", "pair": position.pair, "message": str(exc)}
+            )
+            continue
 
 
 def _check_circuit_breaker(total_equity_now: float, alert_pct: float) -> None:

@@ -1,0 +1,24 @@
+[33mcommit 383cba8c6a38ff85a2ebabe23e80c855de6bcafa[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m
+Author: Ivan Souza <ivanlucio@bemol.com.br>
+Date:   Wed Sep 16 14:47:01 2026 -0300
+
+    ﻿feat(dashboard): carteira real da Binance, cards por moeda e conversao BRL
+    
+    - Nova secao "Carteira na Binance" (wallet_snapshots) mostrando o
+      patrimonio real do Ivan, incluindo posicoes abertas antes do bot existir
+      (dashboard antes so mostrava positions/trades executados pelo bot)
+    - Carteira em grid de cards, um por ativo, com icone da moeda (fallback
+      pra icone generico quando o ativo nao tem icone no pacote)
+    - Valores monetarios do dashboard convertidos pra BRL por padrao, com
+      opcao de trocar pra USDT/dolar no menu de Configuracoes (novo campo
+      display_currency)
+    - Cotacao USDT->BRL agora e buscada no NAVEGADOR (client), nao mais no
+      servidor da Vercel -- a funcao serverless roda em regiao dos EUA e a
+      Binance bloqueia (451) requisicoes vindas de IP americano
+
+ web/app/dashboard/currency-context.tsx |  69 [32m+++++++++++++++++[m
+ web/app/dashboard/money.tsx            |  24 [32m++++++[m
+ web/app/dashboard/page.tsx             | 130 [32m+++++++++++++++++[m[31m----------------[m
+ web/app/dashboard/wallet-grid.tsx      |   5 [32m+[m[31m-[m
+ web/lib/fx.ts                          |  16 [32m+++[m[31m-[m
+ 5 files changed, 177 insertions(+), 67 deletions(-)

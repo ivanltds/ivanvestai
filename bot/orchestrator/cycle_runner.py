@@ -27,7 +27,23 @@ from orchestrator.reconciliation import has_divergence, reconcile
 logger = logging.getLogger("ivanvestai.cycle_runner")
 
 
-async def run_cycle() -> None:
+async def run_cycle(*, ignore_macro_window: bool = False) -> None:
+    """`ignore_macro_window`: SÓ pra teste manual explícito (ver
+    run_cycle_once.py --ignore-macro-window) -- o scheduler automático do
+    main.py sempre chama `run_cycle()` sem esse argumento.
+
+    A partir de 16/09/2026 (ver arquitetura-tecnica.md 9.11) existe uma
+    SEGUNDA forma de ignorar a janela, essa sim usada pelo scheduler
+    automático: `config.bypass_macro_risk_window`, lida a cada ciclo da
+    tabela `settings` (dashboard -> /settings, com aviso de risco explícito
+    na tela). Diferente do `ignore_macro_window` (só teste manual pontual),
+    esse fica ligado até o Ivan desligar de novo -- é uma decisão consciente
+    de operar durante FOMC/CPI, não um atalho de debug.
+
+    NENHUM dos dois afeta a segurança de capital (isso continua 100%
+    governado por settings.dry_run, nunca sobrescrito por comando remoto) --
+    só controlam se o bot considera abrir posição NOVA durante a janela.
+    Gestão de posições já abertas nunca foi bloqueada pela janela macro."""
     from agents.news_agent import NewsAgent as _NewsAgent  # import local (evita ciclo)
 
     config = load_runtime_config()
@@ -45,7 +61,22 @@ async def run_cycle() -> None:
 
     try:
         in_window, event_label = in_macro_risk_window(now)
-        if in_window:
+        if in_window and ignore_macro_window:
+            logger.warning(
+                "Janela de risco macro (%s) ativa, mas IGNORADA a pedido explícito (teste manual).", event_label
+            )
+            vlog.warn(f"Janela de risco macro ativa ({event_label}) — IGNORADA a pedido explícito (teste manual).")
+            in_window = False
+        elif in_window and config.bypass_macro_risk_window:
+            logger.warning(
+                "Janela de risco macro (%s) ativa, mas IGNORADA -- desbloqueada nas configurações do dashboard.",
+                event_label,
+            )
+            vlog.warn(
+                f"Janela de risco macro ativa ({event_label}) — IGNORADA (desbloqueada em /settings pelo Ivan)."
+            )
+            in_window = False
+        elif in_window:
             logger.info("Dentro da janela de risco macro (%s) — sem novas entradas neste ciclo.", event_label)
             vlog.warn(f"Janela de risco macro ativa ({event_label}) — sem novas entradas neste ciclo.")
 

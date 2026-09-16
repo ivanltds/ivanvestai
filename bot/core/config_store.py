@@ -11,6 +11,10 @@ from config.settings import settings as env_settings
 from db.models import Setting
 from db.session import get_session
 
+def _cast_bool(value: str) -> bool:
+    return value.strip().lower() in ("true", "1", "yes", "on")
+
+
 _CASTERS = {
     "cycle_interval_minutes": int,
     "entry_decision_timeout_seconds": int,
@@ -20,6 +24,7 @@ _CASTERS = {
     "top_n_pairs": int,
     "safety_stablecoin": str,
     "bot_status": str,  # "running" | "paused"
+    "bypass_macro_risk_window": _cast_bool,
 }
 
 
@@ -33,6 +38,10 @@ class RuntimeConfig:
     top_n_pairs: int
     safety_stablecoin: str
     bot_status: str
+    bypass_macro_risk_window: bool  # ver arquitetura-tecnica.md 9.11 -- desliga o
+    # bloqueio de ENTRADA NOVA durante janela de risco macro (FOMC/CPI) quando
+    # ligado pelo dashboard (/settings). NÃO afeta dry_run nem a gestão de
+    # posições já abertas -- só a checagem de abrir posição nova.
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -63,4 +72,5 @@ def load_runtime_config() -> RuntimeConfig:
         top_n_pairs=pick("top_n_pairs", env_settings.top_n_pairs),
         safety_stablecoin=pick("safety_stablecoin", env_settings.safety_stablecoin),
         bot_status=pick("bot_status", "paused"),  # começa pausado por segurança até backtest ser revisado
+        bypass_macro_risk_window=pick("bypass_macro_risk_window", False),
     )

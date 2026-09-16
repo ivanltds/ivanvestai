@@ -13,6 +13,7 @@ const DEFAULTS: Record<string, string> = {
   top_n_pairs: "100",
   cycle_interval_minutes: "15",
   display_currency: "BRL",
+  bypass_macro_risk_window: "false",
 };
 
 export default async function SettingsPage() {

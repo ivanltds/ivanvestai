@@ -2,7 +2,9 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { query } from "@/lib/db";
 import { getCached } from "@/lib/redis";
+import { formatMoney, resolveDisplayCurrency } from "@/lib/fx";
 import KillSwitch from "./kill-switch";
+import WalletGrid from "./wallet-grid";
 
 interface Position {
   id: string;
@@ -21,16 +23,40 @@ interface Trade {
   timestamp: string;
 }
 
+interface WalletRow {
+  asset: string;
+  quantity: number;
+  value_usdt: number;
+  avg_buy_price: number | null;
+  timestamp: string;
+}
+
 export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
   const cachedBalance = await getCached<{ total_equity_usdt: number }>("balance");
 
+  // Moeda de exibição escolhida em /settings (BRL é o default -- muda pra
+  // USDT lá). Cotação USDT->BRL vem da Binance (lib/fx.ts); se a Binance
+  // estiver fora, cai pra USDT em vez de mostrar conversão errada.
+  const currencySetting = await query<{ value: string }>(
+    `select value from settings where key = 'display_currency' limit 1`
+  );
+  const { currency, brlRate } = await resolveDisplayCurrency(currencySetting[0]?.value);
+
   // is_paper = false é essencial aqui: com o dry-run (arquitetura-tecnica.md
   // 9.6), positions/trades também recebem registros SIMULADOS (is_paper=true)
   // quando run_cycle_once.py é usado pra testar a orquestração real. Esse
   // dashboard mostra só operação de capital real -- nunca misturar.
+  //
+  // IMPORTANTE (achado em 16/09/2026, ver arquitetura-tecnica.md 9.7): isto
+  // aqui é "posição que o BOT abriu" (via ExecutionAgent, com stop/take
+  // definidos) -- fica vazio sempre que o bot nunca executou uma ordem de
+  // verdade, mesmo que a carteira real na Binance tenha ativos comprados
+  // manualmente antes de o bot existir. O card "Carteira na Binance" logo
+  // abaixo é a carteira de verdade (o que o PortfolioAgent lê direto da
+  // Binance a cada ciclo, independente de quem comprou o quê).
   const openPositions = await query<Position>(
     `select id, pair, quantity, avg_entry_price, status from positions
      where status = 'open' and is_paper = false order by opened_at desc`
@@ -41,17 +67,43 @@ export default async function DashboardPage() {
      where timestamp >= date_trunc('day', now()) and is_paper = false order by timestamp desc limit 50`
   );
 
-  const totalEquity = cachedBalance?.total_equity_usdt ?? 0;
+  // Snapshot mais recente por ativo (não a série histórica inteira) -- é o
+  // retrato da carteira real na última vez que o PortfolioAgent rodou.
+  const walletRows = await query<WalletRow>(
+    `select distinct on (asset) asset, quantity, value_usdt, avg_buy_price, timestamp
+     from wallet_snapshots
+     order by asset, timestamp desc`
+  );
+
+  const walletTotal = walletRows.reduce((sum, r) => sum + r.value_usdt, 0);
+  const walletAsOf = walletRows.length
+    ? walletRows.reduce((latest, r) => (r.timestamp > latest ? r.timestamp : latest), walletRows[0].timestamp)
+    : null;
+
+  // Prioriza o cache do Redis (atualizado a cada ciclo, quando o bot está
+  // rodando continuamente) -- se estiver vazio/expirado (TTL de 60s, ver
+  // core/redis_bridge.py), cai pro último snapshot salvo no Postgres em vez
+  // de mostrar zero.
+  const totalEquity = cachedBalance?.total_equity_usdt ?? walletTotal;
 
   return (
     <div>
       <div className="grid grid-2">
         <div className="card">
-          <div style={{ color: "var(--muted)", fontSize: 13 }}>Balanço geral (BRL)</div>
+          <div style={{ color: "var(--muted)", fontSize: 13 }}>Balanço geral</div>
           <div style={{ fontSize: 28, fontWeight: 700 }}>
-            {/* Conversão USDT -> BRL feita client-side ou via rota /api/fx — placeholder aqui */}
-            {totalEquity.toLocaleString("pt-BR", { style: "currency", currency: "USD" })}
+            {formatMoney(totalEquity, currency, brlRate)}
           </div>
+          {currency === "BRL" && !brlRate && (
+            <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
+              cotação BRL indisponível agora -- mostrando USDT
+            </div>
+          )}
+          {!cachedBalance && walletAsOf && (
+            <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>
+              último snapshot: {new Date(walletAsOf).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}
+            </div>
+          )}
         </div>
         <div className="card">
           <div style={{ color: "var(--muted)", fontSize: 13 }}>Status do bot</div>
@@ -60,12 +112,33 @@ export default async function DashboardPage() {
       </div>
 
       <div className="card">
-        <h2 style={{ fontSize: 16 }}>Posições abertas</h2>
-        {openPositions.length === 0 && <p style={{ color: "var(--muted)" }}>Nenhuma posição aberta.</p>}
+        <h2 style={{ fontSize: 16 }}>Carteira na Binance</h2>
+        {walletRows.length === 0 && (
+          <p style={{ color: "var(--muted)" }}>
+            Nenhum snapshot ainda -- roda o PortfolioAgent (parte de um ciclo do bot) pra popular.
+          </p>
+        )}
+        {walletRows.length > 0 && (
+          <WalletGrid
+            rows={walletRows.map((r) => ({
+              asset: r.asset,
+              quantity: r.quantity,
+              formattedValue: formatMoney(r.value_usdt, currency, brlRate),
+            }))}
+          />
+        )}
+      </div>
+
+      <div className="card">
+        <h2 style={{ fontSize: 16 }}>Posições abertas pelo bot</h2>
+        <p style={{ color: "var(--muted)", fontSize: 12 }}>
+          Só operações que o bot executou de fato (com stop/take definidos) — não é a carteira toda.
+        </p>
+        {openPositions.length === 0 && <p style={{ color: "var(--muted)" }}>Nenhuma posição aberta pelo bot.</p>}
         {openPositions.map((p) => (
           <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid var(--border)" }}>
             <span>{p.pair}</span>
-            <span>{p.quantity} @ {p.avg_entry_price}</span>
+            <span>{p.quantity} @ {formatMoney(p.avg_entry_price, currency, brlRate)}</span>
           </div>
         ))}
       </div>
@@ -76,7 +149,7 @@ export default async function DashboardPage() {
         {todayTrades.map((t) => (
           <div key={t.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid var(--border)" }}>
             <span>{t.pair} — {t.side.toUpperCase()}</span>
-            <span>{t.quantity} @ {t.price}</span>
+            <span>{t.quantity} @ {formatMoney(t.price, currency, brlRate)}</span>
           </div>
         ))}
         <a href="/api/export/trades" style={{ fontSize: 13 }}>Exportar CSV</a>

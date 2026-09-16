@@ -2,7 +2,16 @@
 
 import { useState } from "react";
 
-const FIELDS: { key: string; label: string; type: string }[] = [
+const FIELDS: { key: string; label: string; type: string; options?: { value: string; label: string }[] }[] = [
+  {
+    key: "display_currency",
+    label: "Moeda de exibição no dashboard",
+    type: "select",
+    options: [
+      { value: "BRL", label: "Real (BRL) -- convertido pela cotação da Binance" },
+      { value: "USDT", label: "USDT / dólar (sem conversão)" },
+    ],
+  },
   { key: "safety_stablecoin", label: "Stablecoin de segurança", type: "text" },
   { key: "min_confidence_to_trade", label: "Confiança mínima do comitê (0-1)", type: "number" },
   { key: "max_allocation_pct_per_trade", label: "Teto de capital por operação (0-1)", type: "number" },
@@ -30,12 +39,23 @@ export default function SettingsForm({ initial }: { initial: Record<string, stri
       {FIELDS.map((field) => (
         <label key={field.key} style={{ display: "grid", gap: 4, fontSize: 13 }}>
           {field.label}
-          <input
-            type={field.type}
-            step="0.01"
-            value={values[field.key] ?? ""}
-            onChange={(e) => setValues({ ...values, [field.key]: e.target.value })}
-          />
+          {field.type === "select" ? (
+            <select
+              value={values[field.key] ?? ""}
+              onChange={(e) => setValues({ ...values, [field.key]: e.target.value })}
+            >
+              {field.options?.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type={field.type}
+              step="0.01"
+              value={values[field.key] ?? ""}
+              onChange={(e) => setValues({ ...values, [field.key]: e.target.value })}
+            />
+          )}
         </label>
       ))}
       <button className="primary" onClick={save}>Salvar</button>

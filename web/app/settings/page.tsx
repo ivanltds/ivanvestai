@@ -12,6 +12,7 @@ const DEFAULTS: Record<string, string> = {
   daily_loss_alert_pct: "0.10",
   top_n_pairs: "100",
   cycle_interval_minutes: "15",
+  display_currency: "BRL",
 };
 
 export default async function SettingsPage() {

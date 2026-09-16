@@ -77,7 +77,10 @@ class RiskCommitteeAgent(BaseAgent):
             "Você é o agente final de risco de um comitê de trading. Já foi decidido "
             "aprovar a operação; sua tarefa é definir stop-loss, take-profit e se usa "
             "trailing stop, com base na volatilidade (ATR) do ativo. Seja conservador "
-            "dado que o capital é pequeno."
+            "dado que o capital é pequeno. Mesmo em ativos de baixíssima volatilidade "
+            f"(ATR% pequeno), nunca proponha stop-loss abaixo de {settings.min_stop_loss_pct:.1f}% "
+            f"nem take-profit abaixo de {settings.min_take_profit_pct:.1f}% -- distâncias menores "
+            "que isso costumam ser só ruído normal de preço, não um sinal de risco de verdade."
         )
         user_prompt = (
             f"Par: {data.pair}\nPreço de entrada: {data.entry_price}\n"
@@ -94,4 +97,17 @@ class RiskCommitteeAgent(BaseAgent):
         )
         refined.approve = True
         refined.aggregated_confidence = aggregated
+
+        # Piso programático (não só via prompt) -- achado em 16/09/2026, ver
+        # arquitetura-tecnica.md 9.9: em ativos de baixíssima volatilidade
+        # (ex: tokens lastreados em ouro), stop/take ancorados só no ATR
+        # ficavam tão colados no preço de entrada que ruído normal já
+        # disparava a saída segundos depois de abrir a posição. O prompt
+        # acima já pede pro modelo respeitar o piso, mas isso aqui garante
+        # mesmo se o modelo não seguir a instrução à risca.
+        if refined.stop_loss_pct < settings.min_stop_loss_pct:
+            refined.stop_loss_pct = settings.min_stop_loss_pct
+        if refined.take_profit_pct < settings.min_take_profit_pct:
+            refined.take_profit_pct = settings.min_take_profit_pct
+
         return refined

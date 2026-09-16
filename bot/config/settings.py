@@ -58,6 +58,17 @@ class Settings(BaseSettings):
     entry_decision_timeout_seconds: int = 45
     min_confidence_to_trade: float = 0.80
     min_confidence_to_exit: float = 0.75  # PositionReviewAgent: confiança mínima pra vender uma posição pré-existente
+
+    # Piso de stop/take (RiskCommitteeAgent) -- achado em 16/09/2026 (primeiro
+    # dry-run do comitê completo, ver arquitetura-tecnica.md 9.9): o agente
+    # ancora stop/take no ATR do ativo, e pra ativos de baixíssima volatilidade
+    # por natureza (tokens lastreados em ouro, stablecoins) isso gerava
+    # distâncias tão pequenas que ruído normal de preço já disparava a saída
+    # segundos depois de abrir a posição. Não substitui a decisão do agente
+    # (que continua livre pra propor algo mais largo) -- só evita esse caso
+    # degenerado de stop/take grudado no preço de entrada.
+    min_stop_loss_pct: float = 1.0
+    min_take_profit_pct: float = 1.5
     max_allocation_pct_per_trade: float = 0.50
     daily_loss_alert_pct: float = 0.10
     top_n_pairs: int = 100

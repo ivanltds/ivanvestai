@@ -19,6 +19,7 @@ interface PositionReview {
   confidence: number;
   reasoning: string;
   acted: boolean;
+  isPaper: boolean;
 }
 
 interface WalletGridRow {
@@ -46,12 +47,13 @@ function ReviewBadge({ review }: { review: PositionReview }) {
       </span>
     );
   }
+  const soldLabel = review.isPaper ? "IA vendeu esta posição (simulado)" : "IA vendeu esta posição";
   return (
     <span
       title={review.reasoning}
       style={{ fontSize: 11, color: review.acted ? "var(--red)" : "var(--accent)", cursor: "default" }}
     >
-      {review.acted ? "IA vendeu esta posição" : `IA: vender (${Math.round(review.confidence * 100)}%)`}
+      {review.acted ? soldLabel : `IA: vender (${Math.round(review.confidence * 100)}%)`}
     </span>
   );
 }

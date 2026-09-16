@@ -39,6 +39,7 @@ interface PositionReviewRow {
   confidence: number;
   reasoning: string;
   acted: boolean;
+  is_paper: boolean;
 }
 
 export default async function DashboardPage() {
@@ -94,7 +95,7 @@ export default async function DashboardPage() {
   let positionReviews: PositionReviewRow[] = [];
   try {
     positionReviews = await query<PositionReviewRow>(
-      `select distinct on (asset) asset, decision, confidence, reasoning, acted
+      `select distinct on (asset) asset, decision, confidence, reasoning, acted, is_paper
        from position_reviews
        order by asset, timestamp desc`
     );
@@ -162,6 +163,7 @@ export default async function DashboardPage() {
                         confidence: review.confidence,
                         reasoning: review.reasoning,
                         acted: review.acted,
+                        isPaper: review.is_paper,
                       }
                     : null,
                 };

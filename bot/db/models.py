@@ -205,6 +205,7 @@ class PositionReview(Base):
     reasoning: Mapped[str] = mapped_column(Text, nullable=False)
     value_usdt: Mapped[float] = mapped_column(Float, nullable=False)
     acted: Mapped[bool] = mapped_column(Boolean, default=False)  # True = o bot já vendeu com base nesta avaliação
+    is_paper: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # True = venda simulada (settings.dry_run) -- só relevante quando acted=True
 
 
 class ApiCostLog(Base):

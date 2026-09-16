@@ -175,6 +175,7 @@ class PositionReviewAgent(BaseAgent):
                     reasoning=verdict.reasoning,
                     value_usdt=snapshot.value_usdt,
                     acted=acted,
+                    is_paper=settings.dry_run,
                 )
                 session.add(review)
                 reviews.append(review)

@@ -30,6 +30,7 @@ class PortfolioComparisonAgent(BaseAgent):
         opportunity: ScannerOpportunity,
         total_equity_usdt: float,
         open_positions: list[Position],
+        available_stablecoin: float | None = None,
     ) -> PortfolioCheck:
         reasons: list[str] = []
         approved = True
@@ -41,6 +42,21 @@ class PortfolioComparisonAgent(BaseAgent):
         if not max_allocation_ok(suggested_value, total_equity_usdt, settings.max_allocation_pct_per_trade):
             approved = False
             reasons.append("Valor sugerido excede o teto de alocação por operação.")
+
+        # 1b. Saldo LIVRE na stablecoin de segurança (não o patrimônio total).
+        # O valor sugerido acima é uma % do patrimônio TOTAL, mas a maior
+        # parte dele pode estar em outros ativos (BTC, ETH etc), não em USDT
+        # disponível de verdade pra comprar algo novo -- sem essa checagem, a
+        # ordem só falhava lá na Binance (-2010 "insufficient balance"),
+        # depois de já ter gasto a chamada de LLM do RiskCommitteeAgent.
+        # Achado em 16/09/2026 rodando em produção pela primeira vez, ver
+        # arquitetura-tecnica.md 9.13.
+        if available_stablecoin is not None and suggested_value > available_stablecoin:
+            approved = False
+            reasons.append(
+                f"Saldo livre em {settings.safety_stablecoin} (${available_stablecoin:.2f}) "
+                f"insuficiente pro valor sugerido (${suggested_value:.2f})."
+            )
 
         # 2. Valor mínimo de ordem da Binance (minNotional)
         try:

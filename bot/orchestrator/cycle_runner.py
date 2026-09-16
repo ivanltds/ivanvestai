@@ -97,10 +97,19 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
         )
 
         total_equity = PortfolioAgent.total_equity_usdt(wallet_snapshots)
+        # Saldo LIVRE na stablecoin de segurança (não o patrimônio total) --
+        # necessário porque max_allocation_pct_per_trade sugere um valor em %
+        # do patrimônio TOTAL, mas a maior parte dele pode estar em outros
+        # ativos (BTC, ETH etc), não em USDT disponível pra comprar algo novo.
+        # Achado em 16/09/2026 (BinanceAPIException -2010 "insufficient
+        # balance" na primeira ordem real, ver arquitetura-tecnica.md 9.13).
+        available_stablecoin = next(
+            (s.value_usdt for s in wallet_snapshots if s.asset == settings.safety_stablecoin), 0.0
+        )
         redis_bridge.cache_set("balance", {"total_equity_usdt": total_equity, "ts": now.isoformat()})
         redis_bridge.publish_event("positions", {"total_equity_usdt": total_equity})
 
-        vlog.money(f"Patrimônio total: ${total_equity:,.2f} USDT")
+        vlog.money(f"Patrimônio total: ${total_equity:,.2f} USDT (livre em {settings.safety_stablecoin}: ${available_stablecoin:,.2f})")
         vlog.ok(f"{len(news_items)} notícia(s) coletada(s) | {len(opportunities)} oportunidade(s) do scanner")
 
         _check_circuit_breaker(total_equity, config.daily_loss_alert_pct)
@@ -125,7 +134,7 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
         vlog.section("Passo 2-6 — Viabilidade, portfólio e comitê de risco", emoji="🧭")
         try:
             await asyncio.wait_for(
-                _evaluate_opportunities(opportunities, news_items, total_equity, cycle_id),
+                _evaluate_opportunities(opportunities, news_items, total_equity, available_stablecoin, cycle_id),
                 timeout=config.entry_decision_timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -133,6 +142,18 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
                             config.entry_decision_timeout_seconds)
             vlog.fail(f"Timeout de decisão ({config.entry_decision_timeout_seconds}s) — ciclo cancelado por segurança.")
             redis_bridge.publish_event("alerts", {"type": "timeout", "message": "Timeout de decisão de entrada"})
+        except Exception:
+            # Rede de segurança extra além do try/except em volta da execução da
+            # ordem logo acima: qualquer outro erro não previsto na avaliação de
+            # oportunidades (ex: erro de rede/DB no meio do loop) NÃO pode
+            # impedir a gestão de posições abertas de rodar -- é ela que checa
+            # stop/take das posições REAIS já compradas. Ver arquitetura-tecnica.md
+            # 9.13.
+            logger.exception("Erro inesperado avaliando oportunidades — seguindo pra gestão de posições abertas.")
+            vlog.fail("Erro inesperado avaliando oportunidades — ciclo segue pra gestão de posições abertas.")
+            redis_bridge.publish_event(
+                "alerts", {"type": "cycle_error", "message": "Erro inesperado avaliando oportunidades"}
+            )
 
         # --- Gestão de posições abertas (sem timeout — saída pode ser deliberada) ---
         vlog.section("Gestão de posições abertas", emoji="🛡️")
@@ -145,7 +166,8 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
 
 
 async def _evaluate_opportunities(
-    opportunities: list, news_items: list[NewsItem], total_equity: float, cycle_id: str
+    opportunities: list, news_items: list[NewsItem], total_equity: float,
+    available_stablecoin: float, cycle_id: str,
 ) -> None:
     viability_agent = ViabilityAgent()
     portfolio_agent = PortfolioComparisonAgent()
@@ -161,7 +183,9 @@ async def _evaluate_opportunities(
 
         viability_verdict = await asyncio.to_thread(viability_agent.evaluate, opp, relevant_news)
         vlog.step("🧭", "ViabilityAgent", f"{viability_verdict.decision} (confiança={viability_verdict.confidence:.0%})")
-        portfolio_check = await asyncio.to_thread(portfolio_agent.check, opp, total_equity, open_positions)
+        portfolio_check = await asyncio.to_thread(
+            portfolio_agent.check, opp, total_equity, open_positions, available_stablecoin
+        )
         vlog.step("🛡️", "PortfolioComparisonAgent", "aprovado" if portfolio_check.approved else "reprovado")
 
         if has_divergence(viability_verdict, portfolio_check):
@@ -267,9 +291,26 @@ async def _evaluate_opportunities(
                 vlog.warn(f"Quantidade calculada pra {opp.pair} ficou abaixo do mínimo da Binance — entrada pulada.")
                 continue
 
-            await asyncio.to_thread(execution_agent.open_position, opp.pair, quantity, final)
-            tag = "SIMULADA (dry-run)" if settings.dry_run else "REAL"
-            vlog.entry(f"{opp.pair}: {quantity} @ ~${current_price:,.4f}  [{tag}]")
+            # A ordem pode falhar por motivo alheio ao cálculo acima (ex: saldo
+            # livre em USDT menor que os 50% sugeridos, porque a maior parte do
+            # patrimônio total está em outros ativos -- -2010 "insufficient
+            # balance", achado em 16/09/2026 rodando em produção pela primeira
+            # vez, ver arquitetura-tecnica.md 9.12/9.13). Sem este try/except, a
+            # exceção subia sem tratamento até fora do asyncio.wait_for logo
+            # abaixo e derrubava o ciclo inteiro ANTES de _manage_open_positions()
+            # rodar -- ou seja, uma tentativa de compra que falha podia pular a
+            # checagem de stop/take de posições reais já abertas naquele ciclo.
+            try:
+                await asyncio.to_thread(execution_agent.open_position, opp.pair, quantity, final)
+                tag = "SIMULADA (dry-run)" if settings.dry_run else "REAL"
+                vlog.entry(f"{opp.pair}: {quantity} @ ~${current_price:,.4f}  [{tag}]")
+            except Exception as exc:
+                logger.error("Falha ao executar ordem de compra para %s: %s", opp.pair, exc)
+                vlog.fail(f"Falha ao executar ordem para {opp.pair}: {exc} — oportunidade pulada, ciclo continua.")
+                redis_bridge.publish_event(
+                    "alerts", {"type": "execution_error", "pair": opp.pair, "message": str(exc)}
+                )
+                continue
 
 
 def _review_wallet_positions(wallet_snapshots: list[WalletSnapshot]) -> None:

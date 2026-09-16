@@ -14,19 +14,26 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings
 
-# Dicas amigáveis pros códigos de erro da Binance mais comuns de aparecer
-# na primeira vez que uma chamada ASSINADA (signed) roda -- get_last_price/
-# get_klines_df são endpoints públicos e não passam por aqui, então
-# get_account_balances() costuma ser a primeira chance real de a config
-# da API key ser testada (achado em 16/09/2026, ver arquitetura-tecnica.md).
+# Dicas amigáveis pros códigos de erro da Binance mais comuns. -2015 pode
+# acontecer por dois motivos bem diferentes, então a dica agora depende de
+# qual tipo de chamada falhou (achado em 16/09/2026 rodando com dry_run=False
+# pela primeira vez, ver arquitetura-tecnica.md 9.12): se uma leitura assinada
+# como get_account_balances() já funcionou nesse mesmo processo, IP e
+# 'Enable Reading' já estão comprovadamente corretos -- um -2015 numa ORDEM
+# (place_market_order/place_limit_order) depois disso quase sempre significa
+# só que falta marcar 'Enable Spot & Margin Trading' na mesma API key.
 _BINANCE_ERROR_HINTS: dict[int, str] = {
     -2015: (
         "Erro -2015 (chave/IP/permissão inválidos) -- não é bug de código, é config da "
         "conta/chave na Binance. Confira, nessa ordem de probabilidade:\n"
-        "      1) Restrição de IP da API key (Binance > API Management) não inclui o IP "
+        "      1) Se isso aconteceu tentando ENVIAR UMA ORDEM (place_market_order/"
+        "place_limit_order) e leituras assinadas (saldo, get_my_trades) já funcionaram "
+        "antes nesse mesmo processo: falta marcar 'Enable Spot & Margin Trading' na API "
+        "key (só 'Enable Reading' não é suficiente pra operar).\n"
+        "      2) Restrição de IP da API key (Binance > API Management) não inclui o IP "
         "público atual desta máquina.\n"
-        "      2) A permissão 'Enable Reading' está desmarcada nessa key.\n"
-        "      3) BINANCE_API_KEY/BINANCE_API_SECRET no .env não batem com essa key "
+        "      3) A permissão 'Enable Reading' está desmarcada nessa key.\n"
+        "      4) BINANCE_API_KEY/BINANCE_API_SECRET no .env não batem com essa key "
         "(espaço extra, key revogada/regenerada, ou mainnet/testnet trocados).\n"
         "      https://www.binance.com/en/my/settings/api-management"
     ),
@@ -129,7 +136,18 @@ class BinanceClient:
         return {f["filterType"]: f for f in info["filters"]}
 
     def place_market_order(self, symbol: str, side: str, quantity: float) -> dict:
-        return self._client.create_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
+        # A dica amigável de erro (_hint_for) só estava plugada em
+        # get_account_balances() -- ordem real caindo em -2015 batia direto
+        # no traceback cru do apscheduler, sem nenhuma pista (achado em
+        # 16/09/2026, primeira vez rodando com dry_run=False, ver
+        # arquitetura-tecnica.md 9.12). Corrigido aqui e no place_limit_order.
+        try:
+            return self._client.create_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
+        except BinanceAPIException as exc:
+            hint = _hint_for(exc)
+            if hint:
+                print(f"\n[binance_client] {hint}\n")
+            raise
 
     def place_limit_order(self, symbol: str, side: str, quantity: float, price: float, ttl_seconds: int = 10) -> dict:
         """Ordem limit com fallback pra mercado se não preencher dentro do ttl.
@@ -137,10 +155,16 @@ class BinanceClient:
         Implementação simplificada pro MVP: cria a ordem IOC (immediate-or-cancel);
         se não preencher, o ExecutionAgent decide se tenta de novo a mercado.
         """
-        return self._client.create_order(
-            symbol=symbol, side=side, type="LIMIT", timeInForce="IOC",
-            quantity=quantity, price=f"{price:.8f}",
-        )
+        try:
+            return self._client.create_order(
+                symbol=symbol, side=side, type="LIMIT", timeInForce="IOC",
+                quantity=quantity, price=f"{price:.8f}",
+            )
+        except BinanceAPIException as exc:
+            hint = _hint_for(exc)
+            if hint:
+                print(f"\n[binance_client] {hint}\n")
+            raise
 
 
 binance_client = BinanceClient()

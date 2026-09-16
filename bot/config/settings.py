@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     cycle_interval_minutes: int = 15
     entry_decision_timeout_seconds: int = 45
     min_confidence_to_trade: float = 0.80
+    min_confidence_to_exit: float = 0.75  # PositionReviewAgent: confiança mínima pra vender uma posição pré-existente
     max_allocation_pct_per_trade: float = 0.50
     daily_loss_alert_pct: float = 0.10
     top_n_pairs: int = 100

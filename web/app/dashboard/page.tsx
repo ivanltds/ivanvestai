@@ -33,6 +33,14 @@ interface WalletRow {
   timestamp: string;
 }
 
+interface PositionReviewRow {
+  asset: string;
+  decision: "hold" | "sell";
+  confidence: number;
+  reasoning: string;
+  acted: boolean;
+}
+
 export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
@@ -79,6 +87,22 @@ export default async function DashboardPage() {
      order by asset, timestamp desc`
   );
 
+  // Veredito mais recente do PositionReviewAgent por ativo ("vale manter ou
+  // vender?", ver arquitetura-tecnica.md 9.8). Tabela nova -- em try/catch
+  // pra não derrubar o dashboard inteiro se ainda não existir no banco (basta
+  // rodar `python -m db.init_db` de novo, é idempotente).
+  let positionReviews: PositionReviewRow[] = [];
+  try {
+    positionReviews = await query<PositionReviewRow>(
+      `select distinct on (asset) asset, decision, confidence, reasoning, acted
+       from position_reviews
+       order by asset, timestamp desc`
+    );
+  } catch {
+    positionReviews = [];
+  }
+  const reviewByAsset = new Map(positionReviews.map((r) => [r.asset, r]));
+
   const walletTotal = walletRows.reduce((sum, r) => sum + r.value_usdt, 0);
   const walletAsOf = walletRows.length
     ? walletRows.reduce((latest, r) => (r.timestamp > latest ? r.timestamp : latest), walletRows[0].timestamp)
@@ -114,6 +138,11 @@ export default async function DashboardPage() {
 
         <div className="card">
           <h2 style={{ fontSize: 16 }}>Carteira na Binance</h2>
+          <p style={{ color: "var(--muted)", fontSize: 12 }}>
+            A cada ciclo, o PositionReviewAgent avalia se ainda vale manter cada posição
+            pré-existente (as que o bot não abriu) e vende sozinho quando a confiança é alta
+            e o bot está fora do modo simulado — passe o mouse na etiqueta &quot;IA&quot; pra ver o motivo.
+          </p>
           {walletRows.length === 0 && (
             <p style={{ color: "var(--muted)" }}>
               Nenhum snapshot ainda -- roda o PortfolioAgent (parte de um ciclo do bot) pra popular.
@@ -121,11 +150,22 @@ export default async function DashboardPage() {
           )}
           {walletRows.length > 0 && (
             <WalletGrid
-              rows={walletRows.map((r) => ({
-                asset: r.asset,
-                quantity: r.quantity,
-                valueUsdt: r.value_usdt,
-              }))}
+              rows={walletRows.map((r) => {
+                const review = reviewByAsset.get(r.asset);
+                return {
+                  asset: r.asset,
+                  quantity: r.quantity,
+                  valueUsdt: r.value_usdt,
+                  review: review
+                    ? {
+                        decision: review.decision,
+                        confidence: review.confidence,
+                        reasoning: review.reasoning,
+                        acted: review.acted,
+                      }
+                    : null,
+                };
+              })}
             />
           )}
         </div>

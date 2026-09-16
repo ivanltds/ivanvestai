@@ -11,6 +11,7 @@ from agents.execution_agent import ExecutionAgent
 from agents.market_scanner_agent import MarketScannerAgent
 from agents.portfolio_agent import PortfolioAgent
 from agents.portfolio_comparison_agent import PortfolioComparisonAgent
+from agents.position_review_agent import PositionReviewAgent
 from agents.risk_committee_agent import RiskCommitteeAgent, RiskCommitteeInput
 from agents.viability_agent import ViabilityAgent
 from core import redis_bridge, vlog
@@ -19,7 +20,7 @@ from core.config_store import load_runtime_config
 from core.notifier import alert
 from core.risk_rules import circuit_breaker_triggered, in_macro_risk_window, round_step_size
 from config.settings import settings
-from db.models import CommitteeDecision, DailyEquity, NewsItem, Opportunity, Position
+from db.models import CommitteeDecision, DailyEquity, NewsItem, Opportunity, Position, WalletSnapshot
 from db.session import get_session
 from orchestrator.reconciliation import has_divergence, reconcile
 
@@ -72,6 +73,14 @@ async def run_cycle() -> None:
         vlog.ok(f"{len(news_items)} notícia(s) coletada(s) | {len(opportunities)} oportunidade(s) do scanner")
 
         _check_circuit_breaker(total_equity, config.daily_loss_alert_pct)
+
+        # Revisão de posições PRÉ-EXISTENTES na carteira (compradas manualmente
+        # antes do bot existir, ou há muito tempo) -- roda todo ciclo,
+        # independente de haver oportunidade de ENTRADA nova ou de estar numa
+        # janela de risco macro (essas restrições são sobre abrir posição nova,
+        # não sobre reavaliar o que já existe). Ver arquitetura-tecnica.md 9.8.
+        vlog.section("Revisão de posições pré-existentes na carteira", emoji="🧐")
+        await asyncio.to_thread(_review_wallet_positions, wallet_snapshots)
 
         if in_window or not opportunities:
             vlog.section("Ciclo encerrado", emoji="🏁", color="yellow")
@@ -230,6 +239,19 @@ async def _evaluate_opportunities(
             await asyncio.to_thread(execution_agent.open_position, opp.pair, quantity, final)
             tag = "SIMULADA (dry-run)" if settings.dry_run else "REAL"
             vlog.entry(f"{opp.pair}: {quantity} @ ~${current_price:,.4f}  [{tag}]")
+
+
+def _review_wallet_positions(wallet_snapshots: list[WalletSnapshot]) -> None:
+    """Avalia hold/sell pra cada ativo da carteira real que o bot não
+    comprou por conta própria (ver PositionReviewAgent). Ignora stablecoin,
+    poeira e ativos já geridos por uma Position aberta do bot."""
+    reviews = PositionReviewAgent().run(wallet_snapshots)
+    if not reviews:
+        vlog.ok("Nenhuma posição pré-existente pra revisar neste ciclo "
+                 "(tudo poeira, stablecoin, ou já gerenciado pelo bot).")
+    else:
+        sold = sum(1 for r in reviews if r.acted)
+        vlog.ok(f"{len(reviews)} posição(ões) revisada(s), {sold} venda(s) executada(s).")
 
 
 def _manage_open_positions() -> None:

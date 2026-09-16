@@ -187,6 +187,26 @@ class PaperTrade(Base):
     extra_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class PositionReview(Base):
+    """Veredito do PositionReviewAgent pra uma posição PRÉ-EXISTENTE da
+    carteira real (ativo comprado manualmente antes do bot existir, ou há
+    muito tempo, sem uma Position aberta pelo bot cuidando da saída) --
+    "vale a pena continuar segurando isso ou é melhor vender?". Uma linha
+    por avaliação (histórico, não upsert) -- o dashboard mostra a mais
+    recente por ativo. Ver arquitetura-tecnica.md 9.8."""
+
+    __tablename__ = "position_reviews"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    asset: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    decision: Mapped[str] = mapped_column(String, nullable=False)  # hold|sell
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    value_usdt: Mapped[float] = mapped_column(Float, nullable=False)
+    acted: Mapped[bool] = mapped_column(Boolean, default=False)  # True = o bot já vendeu com base nesta avaliação
+
+
 class ApiCostLog(Base):
     __tablename__ = "api_cost_log"
 

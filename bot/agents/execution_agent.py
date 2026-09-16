@@ -17,6 +17,7 @@ from agents.base import BaseAgent
 from agents.risk_committee_agent import FinalDecision
 from config.settings import settings
 from core.binance_client import binance_client
+from core.risk_rules import round_step_size
 from db.models import Position, Trade
 from db.session import get_session
 
@@ -101,6 +102,52 @@ class ExecutionAgent(BaseAgent):
                 price=fill_price,
                 reason=reason,
                 is_paper=db_position.is_paper,
+            )
+            session.add(trade)
+
+        return trade
+
+    def sell_wallet_asset(self, asset: str, quantity: float, reason: str) -> Trade | None:
+        """Vende um ativo da carteira REAL que não tem uma Position aberta
+        pelo bot (ex: comprado manualmente antes do bot existir) -- usado
+        pelo PositionReviewAgent quando decide que não vale mais a pena
+        segurar. Diferente de `sell_position`, não existe uma Position pra
+        fechar (Trade.position_id fica None); a MESMA regra de dry_run de
+        `_fill_price` se aplica -- com dry_run=True (padrão) é só simulado.
+
+        Arredonda pro LOT_SIZE da Binance antes de vender de verdade (mesma
+        lógica usada pra entradas em orchestrator/cycle_runner.py) -- se a
+        quantidade ficar zerada ou abaixo do mínimo depois do arredondamento,
+        não vende (mantém a posição por segurança em vez de arriscar uma
+        ordem rejeitada ou de tamanho errado)."""
+        pair = f"{asset}{settings.safety_stablecoin}"
+        sell_quantity = quantity
+
+        if not settings.dry_run:
+            try:
+                filters = binance_client.get_symbol_filters(pair)
+                step_size = float(filters.get("LOT_SIZE", {}).get("stepSize", 0) or 0)
+                min_qty = float(filters.get("LOT_SIZE", {}).get("minQty", 0) or 0)
+            except Exception:
+                step_size, min_qty = 0.0, 0.0
+
+            sell_quantity = round_step_size(quantity, step_size) if step_size else quantity
+            if sell_quantity <= 0 or sell_quantity < min_qty:
+                return None
+
+        order_type = self._order_type_for(pair)
+        fill_price = self._fill_price(pair, "SELL", sell_quantity, order_type)
+
+        with get_session() as session:
+            trade = Trade(
+                position_id=None,
+                pair=pair,
+                side="sell",
+                order_type=order_type,
+                quantity=sell_quantity,
+                price=fill_price,
+                reason=reason,
+                is_paper=settings.dry_run,
             )
             session.add(trade)
 

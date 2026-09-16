@@ -167,6 +167,11 @@ class PositionReviewAgent(BaseAgent):
                 except Exception:
                     vlog.fail(f"Falha ao tentar vender {snapshot.asset} -- posição mantida por segurança.")
 
+            # Preço unitário no momento do veredito -- guardado pra dar pra medir,
+            # mais adiante, se hold/sell teria sido a decisão certa (comparando
+            # com o preço futuro do ativo). Ver arquitetura-tecnica.md 9.10.
+            price_at_review = (snapshot.value_usdt / snapshot.quantity) if snapshot.quantity else None
+
             with get_session() as session:
                 review = PositionReview(
                     asset=snapshot.asset,
@@ -176,6 +181,7 @@ class PositionReviewAgent(BaseAgent):
                     value_usdt=snapshot.value_usdt,
                     acted=acted,
                     is_paper=settings.dry_run,
+                    price_at_review=price_at_review,
                 )
                 session.add(review)
                 reviews.append(review)

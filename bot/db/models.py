@@ -206,6 +206,10 @@ class PositionReview(Base):
     value_usdt: Mapped[float] = mapped_column(Float, nullable=False)
     acted: Mapped[bool] = mapped_column(Boolean, default=False)  # True = o bot já vendeu com base nesta avaliação
     is_paper: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")  # True = venda simulada (settings.dry_run) -- só relevante quando acted=True
+    price_at_review: Mapped[float | None] = mapped_column(Float, nullable=True)  # preço unitário no momento do veredito
+    # (value_usdt / quantity) -- guardado pra, mais adiante, comparar com o preço
+    # futuro do ativo e medir se o veredito hold/sell teria sido acertado (ver
+    # arquitetura-tecnica.md 9.10 -- não dava pra medir "acerto" sem isso).
 
 
 class ApiCostLog(Base):

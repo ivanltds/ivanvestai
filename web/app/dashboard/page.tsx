@@ -53,6 +53,11 @@ export default async function DashboardPage() {
   // currency-context.tsx) -- buscar aqui no servidor batia no bloqueio
   // geográfico da Binance pra IPs dos EUA (região padrão da função
   // serverless da Vercel). Aqui só decide qual moeda mostrar.
+  const botStatusSetting = await query<{ value: string }>(
+    `select value from settings where key = 'bot_status' limit 1`
+  );
+  const initialBotStatus = botStatusSetting[0]?.value === "running" ? "running" : "paused";
+
   const currencySetting = await query<{ value: string }>(
     `select value from settings where key = 'display_currency' limit 1`
   );
@@ -133,7 +138,7 @@ export default async function DashboardPage() {
           </div>
           <div className="card">
             <div style={{ color: "var(--muted)", fontSize: 13 }}>Status do bot</div>
-            <KillSwitch />
+            <KillSwitch initialStatus={initialBotStatus} />
           </div>
         </div>
 

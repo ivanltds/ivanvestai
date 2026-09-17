@@ -29,3 +29,23 @@ Para pausar o bot **não é necessário parar o serviço** — use o kill switch
 4. Em Configurações, marque "Reiniciar a tarefa se ela falhar" e defina algumas tentativas.
 
 NSSM é preferível porque trata o processo como um serviço de verdade (reinicia sozinho se cair, loga melhor); Task Scheduler é mais simples de configurar mas menos resiliente a crashes do processo.
+
+### Script pronto pra Opção B (`setup_autostart.ps1`, ver 16/09/2026)
+
+`service/setup_autostart.ps1` automatiza os passos acima via `Register-ScheduledTask`
+(PowerShell) -- não precisa clicar na interface do Agendador de Tarefas. Rode
+como Administrador, uma vez:
+
+```
+powershell -ExecutionPolicy Bypass -File service\setup_autostart.ps1
+```
+
+Ele cria a tarefa `IvanVestAI-Bot`, disparada "ao fazer login" (não "ao
+iniciar o computador" -- evita rodar com um usuário sem o ambiente/OneDrive
+prontos), com reinício automático (até 50 tentativas, a cada 2 min) se o
+processo cair, e `-MultipleInstances IgnoreNew` pra nunca deixar dois
+`main.py` rodando ao mesmo tempo sem querer (dois processos duplicando
+`run_cycle`/`process_pending_commands` seria um risco desnecessário, mesmo
+com o lock de ciclo do Redis já protegendo contra execução simultânea de
+verdade). Detecta o `python.exe` correto (`Get-Command python`) em vez de
+assumir um caminho fixo de `.venv`.

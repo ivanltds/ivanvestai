@@ -1,8 +1,7 @@
-"""Relatório detalhado de performance dos dados de DRY-RUN acumulados até
-agora -- pra alimentar a decisão de quando (ou se) sair do dry_run com
-capital real (ver arquitetura-tecnica.md 9.5 e 9.9).
-
-Junta 3 fontes, que são POPULAÇÕES DIFERENTES e não devem ser misturadas:
+"""Relatório detalhado de performance de TUDO que já rodamos -- dry-run E,
+a partir de 16/09/2026 (ver arquitetura-tecnica.md 9.12+), produção real
+(dry_run=False). Junta as fontes abaixo, que são POPULAÇÕES DIFERENTES e
+não devem ser misturadas entre si em nenhuma conta de win rate/pnl:
 
 1. `paper_trades` -- o paper trading contínuo (run_paper_trading.py,
    rodando desde a sessão da seção 9.6), 4 configurações de estratégia
@@ -24,6 +23,20 @@ Junta 3 fontes, que são POPULAÇÕES DIFERENTES e não devem ser misturadas:
    num "sell" certo, por exemplo), mas já é muito melhor que nada. Vereditos
    de ANTES dessa data ficam com `price_at_review = NULL` (não dá pra
    reconstruir retroativamente) e são ignorados nessa comparação.
+
+4. `trades`/`positions` com is_paper=false -- ordens REAIS de verdade,
+   capital de verdade. Ver arquitetura-tecnica.md 9.12/9.13/9.14 --
+   IMPORTANTE: uma ordem que FALHA antes de qualquer escrita no Postgres
+   (ex: BinanceAPIException levantada dentro de `_fill_price`) nunca gera
+   uma linha em `trades`/`positions` -- essas tentativas fracassadas (ex:
+   HEIUSDT -2015 permissão, NEARUSDT -2010 saldo, ambas em 16/09/2026) só
+   existem no log do terminal, não no banco. Esta seção mostra só o que
+   REALMENTE chegou a ser registrado.
+
+5. `opportunities`/`committee_decisions` -- o funil de decisão completo:
+   quantas oportunidades o scanner achou, quantas cada agente aprovou/
+   reprovou, e os motivos mais comuns de reprovação (ex: quantas caíram
+   por saldo insuficiente depois do fix da seção 9.13).
 
 Mesma metodologia estatística do backtest sweep (seção 9.5): win rate,
 pnl médio, e um t-estatístico simples (média / erro-padrão) como proxy
@@ -239,6 +252,85 @@ def section_position_reviews(session) -> dict:
             "confianca_media": avg_conf, "outcome_aproximado": outcome}
 
 
+def section_real_trades(session) -> dict:
+    print("\n" + "=" * 78)
+    print("4) ORDENS REAIS (trades/positions, is_paper=false) -- capital de verdade")
+    print("=" * 78)
+
+    trades = session.execute(text(
+        "select pair, side, quantity, price, reason, timestamp "
+        "from trades where is_paper = false order by timestamp"
+    )).mappings().all()
+
+    positions = session.execute(text(
+        "select pair, quantity, avg_entry_price, status, opened_at, closed_at "
+        "from positions where is_paper = false order by opened_at"
+    )).mappings().all()
+
+    print(f"\nTotal de trades reais registrados: {len(trades)}  |  Posições reais: {len(positions)}")
+    if not trades:
+        print("Nenhuma ordem real chegou a ser registrada no banco ainda -- todas as tentativas")
+        print("de hoje (16/09/2026) falharam ANTES de qualquer escrita no Postgres (a exceção da")
+        print("Binance interrompe _fill_price antes do `with get_session()`): HEIUSDT (-2015,")
+        print("permissão da API key) e NEARUSDT (-2010, saldo insuficiente). Ver arquitetura-")
+        print("tecnica.md 9.12/9.13 -- essas tentativas só existem no log do terminal, não aqui.")
+        return {"count": 0}
+
+    for t in trades:
+        print(f"  {t['timestamp']}  {t['side']:<5}{t['pair']:<12}qty={t['quantity']}  "
+              f"price=${t['price']:,.4f}  motivo={t['reason']}")
+    return {"trades_total": len(trades), "posicoes_total": len(positions)}
+
+
+def section_decision_funnel(session) -> dict:
+    print("\n" + "=" * 78)
+    print("5) FUNIL DE DECISÃO (opportunities/committee_decisions)")
+    print("=" * 78)
+
+    opps = session.execute(text(
+        "select id, pair, status, final_confidence, timestamp from opportunities order by timestamp"
+    )).mappings().all()
+
+    if not opps:
+        print("Nenhuma oportunidade registrada ainda.")
+        return {"count": 0}
+
+    total = len(opps)
+    approved = sum(1 for o in opps if o["status"] == "approved")
+    rejected = total - approved
+    print(f"\nTotal de oportunidades avaliadas pelo comitê: {total}  |  aprovadas: {approved}  |  reprovadas: {rejected}")
+
+    decisions = session.execute(text(
+        "select opportunity_id, agent_name, decision, reasoning from committee_decisions"
+    )).mappings().all()
+
+    by_agent: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    reasons: dict[str, int] = defaultdict(int)
+    for d in decisions:
+        by_agent[d["agent_name"]][d["decision"]] += 1
+        if d["agent_name"] == "portfolio_comparison_agent" and d["decision"] == "reject":
+            # agrupa por motivo (reasoning é "; "-separado, pega o primeiro pra não
+            # explodir em combinações únicas)
+            first_reason = d["reasoning"].split(";")[0].strip()
+            reasons[first_reason] += 1
+
+    print(f"\n{'Agente':<28}{'approve':>10}{'reject':>10}")
+    print("-" * 50)
+    for agent, counts in by_agent.items():
+        print(f"{agent:<28}{counts.get('approve', 0):>10}{counts.get('reject', 0):>10}")
+
+    if reasons:
+        print("\nMotivos de reprovação do PortfolioComparisonAgent (top):")
+        for reason, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            print(f"  {n:>3}x  {reason}")
+
+    return {
+        "oportunidades_total": total, "aprovadas": approved, "reprovadas": rejected,
+        "por_agente": {a: dict(c) for a, c in by_agent.items()},
+        "motivos_reprovacao_portfolio": dict(reasons),
+    }
+
+
 def main() -> None:
     as_json = "--json" in sys.argv
     print("=" * 78)
@@ -249,6 +341,8 @@ def main() -> None:
         r1 = section_paper_trades(session)
         r2 = section_real_pipeline(session)
         r3 = section_position_reviews(session)
+        r4 = section_real_trades(session)
+        r5 = section_decision_funnel(session)
 
     print("\n" + "=" * 78)
     print("Fim do relatório.")
@@ -256,8 +350,10 @@ def main() -> None:
 
     if as_json:
         print("\n--- JSON (cole de volta se for pedir análise) ---")
-        print(json.dumps({"paper_trades": r1, "pipeline_real": r2, "position_reviews": r3},
-                          indent=2, default=str))
+        print(json.dumps({
+            "paper_trades": r1, "pipeline_real_dry_run": r2, "position_reviews": r3,
+            "trades_reais": r4, "funil_decisao": r5,
+        }, indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -15,10 +15,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: pip install -r requirements.txt
-      - run: pip install ruff
+          # pandas-ta 0.4.x exige Python >= 3.12 (com 3.11 o pip não acha a distribuição)
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
       - run: ruff check .
+      - run: pytest
 
   web-lint:
     runs-on: ubuntu-latest

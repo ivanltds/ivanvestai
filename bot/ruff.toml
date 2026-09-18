@@ -1,0 +1,7 @@
+# Regras explícitas: o conjunto padrão do ruff mudou entre versões (o mais recente
+# inclui BLE001/I001/DTZ etc.), então o CI com `pip install ruff` sem pin quebrava
+# por regra de estilo, não por bug. Aqui só o núcleo: erros de sintaxe/pyflakes.
+line-length = 120
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import time
 import uuid
 
 from agents.execution_agent import ExecutionAgent
@@ -47,19 +48,37 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
     from agents.news_agent import NewsAgent as _NewsAgent  # import local (evita ciclo)
 
     config = load_runtime_config()
-    if config.bot_status != "running":
-        logger.info("Bot pausado (settings.bot_status != running) — ciclo ignorado.")
-        return
 
-    if not redis_bridge.acquire_cycle_lock(ttl_seconds=config.entry_decision_timeout_seconds + 60):
+    # TTL do lock cobre coleta (~100 pares x 3 timeframes) + avaliação + gestão;
+    # um TTL curto deixava o lock expirar no meio de um ciclo lento.
+    if not redis_bridge.acquire_cycle_lock(ttl_seconds=max(600, config.entry_decision_timeout_seconds * 4)):
         logger.warning("Ciclo anterior ainda em andamento (lock ativo) — pulando este disparo.")
         return
 
     cycle_id = str(uuid.uuid4())
     now = dt.datetime.now(dt.timezone.utc)
-    vlog.cycle_banner(cycle_id, settings.dry_run)
 
     try:
+        vlog.cycle_banner(cycle_id, settings.dry_run)
+
+        # Gestão de posições abertas (stop/take/trailing/flag manual) PRIMEIRO,
+        # antes da coleta (que faz ~300 chamadas HTTP e pode falhar) e antes de
+        # qualquer `return` antecipado. Bug corrigido em 18/09/2026: ela ficava
+        # no fim do ciclo, depois do `return` de "janela macro ou sem
+        # oportunidades" -- ou seja, na maioria dos ciclos (scanner vazio) e no
+        # dia inteiro do FOMC as posições reais nunca tinham stop/take checados.
+        # Só precisa do banco e do preço atual. Sem timeout -- saída pode ser deliberada.
+        vlog.section("Gestão de posições abertas", emoji="🛡️")
+        await _safe_manage_open_positions()
+
+        if config.bot_status != "running":
+            # "Pausado" bloqueia só ENTRADAS novas. Antes, pausar (kill switch)
+            # deixava posições reais sem nenhuma proteção e fazia o force_sell
+            # nunca executar (revisão de 18/09/2026).
+            logger.info("Bot pausado (settings.bot_status != running) — sem novas entradas; posições foram gerenciadas.")
+            vlog.warn("Bot pausado — sem novas entradas (posições abertas já foram gerenciadas).")
+            return
+
         in_window, event_label = in_macro_risk_window(now)
         if in_window and ignore_macro_window:
             logger.warning(
@@ -112,15 +131,23 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
         vlog.money(f"Patrimônio total: ${total_equity:,.2f} USDT (livre em {settings.safety_stablecoin}: ${available_stablecoin:,.2f})")
         vlog.ok(f"{len(news_items)} notícia(s) coletada(s) | {len(opportunities)} oportunidade(s) do scanner")
 
-        _check_circuit_breaker(total_equity, config.daily_loss_alert_pct)
+        try:
+            _check_circuit_breaker(total_equity, config.daily_loss_alert_pct)
+        except Exception:
+            logger.exception("Falha na checagem do circuit breaker — ciclo segue.")
+            vlog.fail("Falha na checagem do circuit breaker — ciclo segue mesmo assim.")
 
         # Revisão de posições PRÉ-EXISTENTES na carteira (compradas manualmente
-        # antes do bot existir, ou há muito tempo) -- roda todo ciclo,
-        # independente de haver oportunidade de ENTRADA nova ou de estar numa
-        # janela de risco macro (essas restrições são sobre abrir posição nova,
-        # não sobre reavaliar o que já existe). Ver arquitetura-tecnica.md 9.8.
+        # antes do bot existir, ou há muito tempo) -- roda independente de haver
+        # oportunidade de ENTRADA nova ou de estar numa janela de risco macro
+        # (essas restrições são sobre abrir posição nova, não sobre reavaliar o
+        # que já existe). Ver arquitetura-tecnica.md 9.8.
         vlog.section("Revisão de posições pré-existentes na carteira", emoji="🧐")
-        await asyncio.to_thread(_review_wallet_positions, wallet_snapshots)
+        try:
+            await asyncio.to_thread(_review_wallet_positions, wallet_snapshots)
+        except Exception:
+            logger.exception("Erro inesperado na revisão de posições pré-existentes — ciclo segue.")
+            vlog.fail("Erro na revisão de posições pré-existentes — ciclo segue mesmo assim.")
 
         if in_window or not opportunities:
             vlog.section("Ciclo encerrado", emoji="🏁", color="yellow")
@@ -129,47 +156,25 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
             vlog.ok("Coleta e checagens de segurança concluídas sem erros.")
             return
 
-        # --- Passo 2-6: viabilidade + portfólio + reconciliação + veto final,
-        # com timeout só para decisão de ENTRADA -------------------------
+        # --- Passo 2-6: viabilidade + portfólio + reconciliação + veto final ----
+        # O orçamento de tempo (entry_decision_timeout_seconds) é um PRAZO checado
+        # entre oportunidades dentro de _evaluate_opportunities, não um
+        # asyncio.wait_for: cancelar o await não para a thread (asyncio.to_thread),
+        # então uma ordem já enviada podia seguir rodando "depois do timeout".
         vlog.section("Passo 2-6 — Viabilidade, portfólio e comitê de risco", emoji="🧭")
         try:
-            await asyncio.wait_for(
-                _evaluate_opportunities(opportunities, news_items, total_equity, available_stablecoin, cycle_id),
-                timeout=config.entry_decision_timeout_seconds,
+            await _evaluate_opportunities(
+                opportunities, news_items, total_equity, available_stablecoin, cycle_id,
+                deadline=time.monotonic() + config.entry_decision_timeout_seconds,
             )
-        except asyncio.TimeoutError:
-            logger.warning("Timeout de decisão de entrada (%ss) estourado — ciclo cancelado por segurança.",
-                            config.entry_decision_timeout_seconds)
-            vlog.fail(f"Timeout de decisão ({config.entry_decision_timeout_seconds}s) — ciclo cancelado por segurança.")
-            redis_bridge.publish_event("alerts", {"type": "timeout", "message": "Timeout de decisão de entrada"})
         except Exception:
-            # Rede de segurança extra além do try/except em volta da execução da
-            # ordem logo acima: qualquer outro erro não previsto na avaliação de
-            # oportunidades (ex: erro de rede/DB no meio do loop) NÃO pode
-            # impedir a gestão de posições abertas de rodar -- é ela que checa
-            # stop/take das posições REAIS já compradas. Ver arquitetura-tecnica.md
-            # 9.13.
-            logger.exception("Erro inesperado avaliando oportunidades — seguindo pra gestão de posições abertas.")
-            vlog.fail("Erro inesperado avaliando oportunidades — ciclo segue pra gestão de posições abertas.")
+            # Rede de segurança: qualquer erro não previsto na avaliação de
+            # oportunidades (ex: erro de rede/DB no meio do loop) não pode
+            # derrubar o ciclo. Ver arquitetura-tecnica.md 9.13.
+            logger.exception("Erro inesperado avaliando oportunidades.")
+            vlog.fail("Erro inesperado avaliando oportunidades — ciclo encerrado.")
             redis_bridge.publish_event(
                 "alerts", {"type": "cycle_error", "message": "Erro inesperado avaliando oportunidades"}
-            )
-
-        # --- Gestão de posições abertas (sem timeout — saída pode ser deliberada) ---
-        vlog.section("Gestão de posições abertas", emoji="🛡️")
-        try:
-            _manage_open_positions()
-        except Exception:
-            # Rede de segurança extra além do try/except por posição dentro de
-            # _manage_open_positions() -- qualquer erro fora do loop (ex: falha
-            # na query inicial) não pode impedir o ciclo de terminar limpo e
-            # liberar o lock (isso já é garantido pelo finally logo abaixo,
-            # mas sem isto o traceback subiria até o apscheduler sem log
-            # nenhum daqui). Ver arquitetura-tecnica.md 9.14.
-            logger.exception("Erro inesperado gerenciando posições abertas.")
-            vlog.fail("Erro inesperado gerenciando posições abertas — ciclo será concluído mesmo assim.")
-            redis_bridge.publish_event(
-                "alerts", {"type": "cycle_error", "message": "Erro inesperado gerenciando posições abertas"}
             )
 
         vlog.banner("🏁  CICLO CONCLUÍDO", f"ciclo {cycle_id[:8]}", color="green")
@@ -178,9 +183,24 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
         redis_bridge.release_cycle_lock()
 
 
+async def _safe_manage_open_positions() -> None:
+    """Gestão de posições abertas em thread (não bloqueia o event loop) e com
+    rede de segurança: qualquer erro fora do loop por posição (ex: falha na
+    query inicial) não pode impedir o ciclo de seguir/liberar o lock. Ver
+    arquitetura-tecnica.md 9.14."""
+    try:
+        await asyncio.to_thread(_manage_open_positions)
+    except Exception:
+        logger.exception("Erro inesperado gerenciando posições abertas.")
+        vlog.fail("Erro inesperado gerenciando posições abertas — ciclo segue mesmo assim.")
+        redis_bridge.publish_event(
+            "alerts", {"type": "cycle_error", "message": "Erro inesperado gerenciando posições abertas"}
+        )
+
+
 async def _evaluate_opportunities(
     opportunities: list, news_items: list[NewsItem], total_equity: float,
-    available_stablecoin: float, cycle_id: str,
+    available_stablecoin: float, cycle_id: str, deadline: float | None = None,
 ) -> None:
     viability_agent = ViabilityAgent()
     portfolio_agent = PortfolioComparisonAgent()
@@ -190,7 +210,16 @@ async def _evaluate_opportunities(
     with get_session() as session:
         open_positions = session.query(Position).filter_by(status="open").all()
 
+    # Melhores primeiro: se o prazo estourar, o que fica sem avaliar é o de menor confluência.
+    opportunities = sorted(opportunities, key=lambda o: o.confluence, reverse=True)
+
     for opp in opportunities:
+        if deadline is not None and time.monotonic() > deadline:
+            logger.warning("Prazo de decisão de entrada estourado — oportunidades restantes ficam pro próximo ciclo.")
+            vlog.warn("Prazo de decisão de entrada estourado — oportunidades restantes ficam pro próximo ciclo.")
+            redis_bridge.publish_event("alerts", {"type": "timeout", "message": "Prazo de decisão de entrada estourado"})
+            return
+
         vlog.step("🔎", "Oportunidade", f"{opp.pair} ({opp.strategy}, regime={opp.regime})")
         relevant_news = [n for n in news_items if opp.pair.replace("USDT", "") in n.title_original.upper()]
 
@@ -201,7 +230,10 @@ async def _evaluate_opportunities(
         )
         vlog.step("🛡️", "PortfolioComparisonAgent", "aprovado" if portfolio_check.approved else "reprovado")
 
-        if has_divergence(viability_verdict, portfolio_check):
+        # Só reconcilia quando o portfólio APROVOU: se ele reprovou por regra dura
+        # (saldo, minNotional, correlação), o comitê veta de qualquer jeito e a
+        # chamada extra de LLM seria custo puro.
+        if portfolio_check.approved and has_divergence(viability_verdict, portfolio_check):
             viability_verdict = await asyncio.to_thread(
                 reconcile, viability_agent, opp, viability_verdict, portfolio_check
             )
@@ -314,9 +346,15 @@ async def _evaluate_opportunities(
             # rodar -- ou seja, uma tentativa de compra que falha podia pular a
             # checagem de stop/take de posições reais já abertas naquele ciclo.
             try:
-                await asyncio.to_thread(execution_agent.open_position, opp.pair, quantity, final)
+                trade = await asyncio.to_thread(execution_agent.open_position, opp.pair, quantity, final)
                 tag = "SIMULADA (dry-run)" if settings.dry_run else "REAL"
-                vlog.entry(f"{opp.pair}: {quantity} @ ~${current_price:,.4f}  [{tag}]")
+                vlog.entry(f"{opp.pair}: {trade.quantity} @ ~${trade.price:,.4f}  [{tag}]")
+                # Estado da própria rodada: o saldo livre gasto e a posição nova
+                # valem pras oportunidades seguintes do MESMO ciclo (antes todas
+                # assumiam o saldo inicial e as compras seguintes falhavam com -2010).
+                available_stablecoin = max(available_stablecoin - trade.quantity * trade.price, 0.0)
+                with get_session() as session:
+                    open_positions = session.query(Position).filter_by(status="open").all()
             except Exception as exc:
                 logger.error("Falha ao executar ordem de compra para %s: %s", opp.pair, exc)
                 vlog.fail(f"Falha ao executar ordem para {opp.pair}: {exc} — oportunidade pulada, ciclo continua.")
@@ -376,18 +414,20 @@ def _manage_open_positions() -> None:
             # abertas em regimes diferentes.
             tag = "SIMULADA (paper)" if position.is_paper else "REAL"
 
+            exit_reason = None
             if position.sell_flag == "immediate":
-                execution_agent.sell_position(position, reason="manual_flag", immediate=True)
-                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (flag manual)  [{tag}]", positive=True)
-                continue
+                exit_reason, label, positive = "manual_flag", "flag manual", True
+            elif position.stop_price and current_price <= position.stop_price:
+                exit_reason, label, positive = "stop_loss", "🛑 stop loss", False
+            elif position.take_price and current_price >= position.take_price:
+                exit_reason, label, positive = "take_profit", "🎉 take profit", True
 
-            if position.stop_price and current_price <= position.stop_price:
-                execution_agent.sell_position(position, reason="stop_loss", immediate=True)
-                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🛑 stop loss)  [{tag}]", positive=False)
-                continue
-            if position.take_price and current_price >= position.take_price:
-                execution_agent.sell_position(position, reason="take_profit", immediate=True)
-                vlog.exit_(f"{position.pair} @ ~${current_price:,.4f} (🎉 take profit)  [{tag}]", positive=True)
+            if exit_reason:
+                trade = execution_agent.sell_position(position, reason=exit_reason, immediate=True)
+                if trade is None:
+                    vlog.warn(f"{position.pair}: posição sem saldo real na Binance — fechada só no banco (ver alerta).")
+                else:
+                    vlog.exit_(f"{position.pair} @ ~${trade.price:,.4f} ({label})  [{tag}]", positive=positive)
                 continue
 
             execution_agent.update_trailing_stop(position, current_price)

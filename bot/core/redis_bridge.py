@@ -69,11 +69,25 @@ def drain_commands() -> list[dict[str, Any]]:
 
 # --- Lock de ciclo --------------------------------------------------------
 
-def acquire_cycle_lock(ttl_seconds: int = 120) -> bool:
+_lock_token: str | None = None
+
+
+def acquire_cycle_lock(ttl_seconds: int = 600) -> bool:
+    """Lock com token do dono: `release_cycle_lock` só apaga se o lock ainda é
+    NOSSO (se o TTL expirou e outro processo pegou, não derruba o dele)."""
+    global _lock_token
     token = str(uuid.uuid4())
-    acquired = _client().set("lock:cycle", token, nx=True, ex=ttl_seconds)
-    return bool(acquired)
+    acquired = bool(_client().set("lock:cycle", token, nx=True, ex=ttl_seconds))
+    if acquired:
+        _lock_token = token
+    return acquired
 
 
 def release_cycle_lock() -> None:
-    _client().delete("lock:cycle")
+    global _lock_token
+    token, _lock_token = _lock_token, None
+    if token is None:
+        return
+    client = _client()
+    if client.get("lock:cycle") == token:
+        client.delete("lock:cycle")

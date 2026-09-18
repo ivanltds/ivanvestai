@@ -13,6 +13,7 @@ from binance.exceptions import BinanceAPIException
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings
+from core.order_utils import format_quantity
 
 # Dicas amigáveis pros códigos de erro da Binance mais comuns. -2015 pode
 # acontecer por dois motivos bem diferentes, então a dica agora depende de
@@ -82,13 +83,20 @@ class BinanceClient:
         return [p["symbol"] for p in pairs[:top_n]]
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-    def get_klines_df(self, symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-        raw = self._client.get_klines(symbol=symbol, interval=interval, limit=limit)
+    def get_klines_df(self, symbol: str, interval: str, limit: int = 200, closed_only: bool = False) -> pd.DataFrame:
+        """`closed_only=True` descarta o candle ainda em formação (o último, se
+        `close_time` for futuro) -- indicadores/volume calculados num candle
+        parcial divergem do backtest, que só enxerga candles fechados. O
+        scanner e o PositionReviewAgent usam True; o padrão False preserva o
+        comportamento dos scripts de backtest/paper trading."""
+        raw = self._client.get_klines(symbol=symbol, interval=interval, limit=limit + 1 if closed_only else limit)
         df = pd.DataFrame(raw, columns=_KLINE_COLUMNS)
         for col in ("open", "high", "low", "close", "volume"):
             df[col] = df[col].astype(float)
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
-        return df
+        if closed_only and len(df) and int(df["close_time"].iloc[-1]) > int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000):
+            df = df.iloc[:-1]
+        return df.tail(limit).reset_index(drop=True) if closed_only else df
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_klines_df_window(
@@ -123,6 +131,16 @@ class BinanceClient:
         return float(ticker["price"])
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    def get_asset_balance(self, asset: str) -> tuple[float, float]:
+        """(free, locked) de um ativo da subconta -- usado antes de vender pra
+        nunca pedir mais do que o saldo real (taxa cobrada no ativo, saldo em
+        ordem aberta etc). Só leitura."""
+        bal = self._client.get_asset_balance(asset=asset)
+        if not bal:
+            return 0.0, 0.0
+        return float(bal["free"]), float(bal["locked"])
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
     def get_my_trades(self, symbol: str) -> list[dict]:
         """Histórico de execuções da subconta nesse par -- usado pelo
         PortfolioAgent pra calcular o preço médio de compra real, em vez de
@@ -142,7 +160,10 @@ class BinanceClient:
         # 16/09/2026, primeira vez rodando com dry_run=False, ver
         # arquitetura-tecnica.md 9.12). Corrigido aqui e no place_limit_order.
         try:
-            return self._client.create_order(symbol=symbol, side=side, type="MARKET", quantity=quantity)
+            # quantity como string decimal (nunca '1e-05') -- ver core/order_utils.py
+            return self._client.create_order(
+                symbol=symbol, side=side, type="MARKET", quantity=format_quantity(quantity)
+            )
         except BinanceAPIException as exc:
             hint = _hint_for(exc)
             if hint:
@@ -158,7 +179,7 @@ class BinanceClient:
         try:
             return self._client.create_order(
                 symbol=symbol, side=side, type="LIMIT", timeInForce="IOC",
-                quantity=quantity, price=f"{price:.8f}",
+                quantity=format_quantity(quantity), price=f"{price:.8f}",
             )
         except BinanceAPIException as exc:
             hint = _hint_for(exc)

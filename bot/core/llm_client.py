@@ -17,7 +17,8 @@ from config.settings import settings
 from db.models import ApiCostLog
 from db.session import get_session
 
-_client = OpenAI(api_key=settings.openai_api_key)
+# timeout curto + 1 retry: o default do SDK é 10 min, o que travaria o ciclo inteiro numa chamada pendurada.
+_client = OpenAI(api_key=settings.openai_api_key, timeout=30.0, max_retries=1)
 
 T = TypeVar("T", bound=BaseModel)
 

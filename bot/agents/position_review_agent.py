@@ -22,6 +22,7 @@ manualmente (.env, nunca via dashboard) é que a venda de verdade acontece,
 e mesmo assim só quando a confiança do veredito >= min_confidence_to_exit."""
 from __future__ import annotations
 
+import datetime as dt
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -35,6 +36,7 @@ from core.indicators import confluence_score, market_regime, score_mean_reversio
 from core.risk_rules import is_stablecoin
 from db.models import Position, PositionReview, WalletSnapshot
 from db.session import get_session
+from sqlalchemy import func
 
 # ~1 BRL na cotação usual -- valor pequeno o bastante pra não compensar nem a
 # taxa de venda na Binance. Independente do threshold de exibição "menos de
@@ -60,9 +62,9 @@ class PositionReviewAgent(BaseAgent):
 
     def _technical_snapshot(self, pair: str) -> dict | None:
         try:
-            df_4h = binance_client.get_klines_df(pair, "4h", limit=120)
-            df_1h = binance_client.get_klines_df(pair, "1h", limit=120)
-            df_15m = binance_client.get_klines_df(pair, "15m", limit=120)
+            df_4h = binance_client.get_klines_df(pair, "4h", limit=120, closed_only=True)
+            df_1h = binance_client.get_klines_df(pair, "1h", limit=120, closed_only=True)
+            df_15m = binance_client.get_klines_df(pair, "15m", limit=120, closed_only=True)
             regime = market_regime(df_4h)
             votes = score_trend_following(df_1h, df_15m) if regime == "trend" else score_mean_reversion(df_15m)
             return {
@@ -123,9 +125,24 @@ class PositionReviewAgent(BaseAgent):
             response_model=PositionReviewVerdict,
         )
 
+    def _recently_reviewed_assets(self) -> set[str]:
+        """Ativos revisados há menos de `position_review_interval_minutes` --
+        pulados neste ciclo. Sem isso cada ativo da carteira era reavaliado com
+        gpt-4o a cada ciclo (96x/dia), gastando LLM à toa (revisão de 18/09/2026)."""
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=settings.position_review_interval_minutes)
+        with get_session() as session:
+            rows = (
+                session.query(PositionReview.asset)
+                .group_by(PositionReview.asset)
+                .having(func.max(PositionReview.timestamp) >= cutoff)
+                .all()
+            )
+        return {r[0] for r in rows}
+
     def run(self, wallet_snapshots: list[WalletSnapshot]) -> list[PositionReview]:
         with get_session() as session:
             open_positions = session.query(Position).filter_by(status="open").all()
+        recently_reviewed = self._recently_reviewed_assets()
 
         execution_agent = ExecutionAgent()
         reviews: list[PositionReview] = []
@@ -136,6 +153,8 @@ class PositionReviewAgent(BaseAgent):
             if snapshot.value_usdt < DUST_THRESHOLD_USDT:
                 continue
             if self._already_bot_managed(snapshot.asset, open_positions):
+                continue
+            if snapshot.asset in recently_reviewed:
                 continue
 
             try:

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import math
 from dataclasses import dataclass
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -50,12 +49,11 @@ def round_step_size(quantity: float, step_size: float) -> float:
     código fazia esse ajuste -- ver arquitetura-tecnica.md 9.6."""
     if step_size <= 0 or quantity <= 0:
         return max(quantity, 0.0)
-    steps = math.floor(quantity / step_size)
-    rounded = steps * step_size
-    # elimina ruído de ponto flutuante (ex: 0.30000000000000004) usando a
-    # quantidade de casas decimais do próprio step_size como referência
-    decimals = max(0, -Decimal(str(step_size)).as_tuple().exponent)
-    return round(rounded, decimals)
+    # Decimal (não float): 0.3 / 0.1 = 2.9999999999999996 em float, o que fazia
+    # floor() devolver 2 passos e arredondar 0.3 pra 0.2 (achado nos testes,
+    # 18/09/2026). Decimal(str(x)) usa a representação decimal "de tela" dos dois.
+    q, step = Decimal(str(quantity)), Decimal(str(step_size))
+    return float((q // step) * step)
 
 
 def correlation_ok(correlation_with_open_position: float, threshold: float = 0.75) -> bool:

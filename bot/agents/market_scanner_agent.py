@@ -45,9 +45,9 @@ class MarketScannerAgent(BaseAgent):
                 continue
 
             try:
-                df_4h = binance_client.get_klines_df(pair, "4h", limit=120)
-                df_1h = binance_client.get_klines_df(pair, "1h", limit=120)
-                df_15m = binance_client.get_klines_df(pair, "15m", limit=120)
+                df_4h = binance_client.get_klines_df(pair, "4h", limit=120, closed_only=True)
+                df_1h = binance_client.get_klines_df(pair, "1h", limit=120, closed_only=True)
+                df_15m = binance_client.get_klines_df(pair, "15m", limit=120, closed_only=True)
 
                 regime = market_regime(df_4h)
 

@@ -55,9 +55,14 @@ class Settings(BaseSettings):
 
     # Parâmetros operacionais (defaults — sobrescritos pela tabela settings quando presentes)
     cycle_interval_minutes: int = 15
-    entry_decision_timeout_seconds: int = 45
+    # Orçamento de tempo pra AVALIAR oportunidades de entrada (LLM). Checado entre
+    # oportunidades -- uma ordem já em andamento nunca é interrompida no meio.
+    entry_decision_timeout_seconds: int = 120
     min_confidence_to_trade: float = 0.80
     min_confidence_to_exit: float = 0.75  # PositionReviewAgent: confiança mínima pra vender uma posição pré-existente
+    # PositionReviewAgent: intervalo mínimo entre duas revisões do MESMO ativo (controla custo de LLM:
+    # sem isso cada ativo da carteira era reavaliado com gpt-4o a cada ciclo de 15 min).
+    position_review_interval_minutes: int = 240
 
     # Piso de stop/take (RiskCommitteeAgent) -- achado em 16/09/2026 (primeiro
     # dry-run do comitê completo, ver arquitetura-tecnica.md 9.9): o agente

@@ -51,7 +51,12 @@ export default function SettingsForm({ initial }: { initial: Record<string, stri
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(values),
     });
-    setStatus(res.ok ? "Salvo." : "Erro ao salvar.");
+    if (res.ok) {
+      setStatus("Salvo.");
+      return;
+    }
+    const data = await res.json().catch(() => null);
+    setStatus(data?.fields ? `Valor inválido em: ${data.fields.join(", ")}` : "Erro ao salvar.");
   }
 
   return (

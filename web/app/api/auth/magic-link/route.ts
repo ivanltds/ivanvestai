@@ -6,7 +6,15 @@ import { query } from "@/lib/db";
 // (ex: reaproveitar o SMTP do bot, ou um serviço tipo Resend do lado do Next.js).
 // Aqui só geramos e validamos o token; o TODO abaixo marca onde plugar o envio.
 export async function POST(req: NextRequest) {
-  const { email } = await req.json();
+  let email: unknown;
+  try {
+    ({ email } = await req.json());
+  } catch {
+    return NextResponse.json({ error: "Requisição inválida" }, { status: 400 });
+  }
+  if (typeof email !== "string" || !email) {
+    return NextResponse.json({ error: "Requisição inválida" }, { status: 400 });
+  }
 
   const rows = await query(`select 1 from users where email = $1`, [email]);
   if (rows.length === 0) {
@@ -18,7 +26,11 @@ export async function POST(req: NextRequest) {
   const link = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://ivanvestai.vercel.app"}/api/auth/verify?token=${token}`;
 
   // TODO: enviar `link` por e-mail (provedor a definir na implementação).
-  console.log("Magic link gerado:", link);
+  // O link é uma credencial de login (15 min) -- só é logado em desenvolvimento
+  // local, nunca nos logs da Vercel em produção.
+  if (process.env.NODE_ENV !== "production") {
+    console.log("Magic link gerado:", link);
+  }
 
   return NextResponse.json({ ok: true });
 }

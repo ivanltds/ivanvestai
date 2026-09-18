@@ -5,7 +5,15 @@ import { readRecentEvents } from "@/lib/redis";
 export const dynamic = "force-dynamic";
 
 const CHANNELS = ["positions", "decisions", "news", "alerts"];
-const POLL_INTERVAL_MS = 4000;
+// Cada poll = 4 leituras no Upstash (uma por canal). A 4s por aba isso dava
+// ~86 mil requisições/dia por aba aberta e estourava o free tier do Upstash; a
+// 15s cai pra ~23 mil. O bot só publica eventos a cada ciclo (15 min), então a
+// latência extra não importa.
+const POLL_INTERVAL_MS = 15000;
+// A conexão é encerrada de tempos em tempos (o EventSource do browser reconecta
+// sozinho) -- evita função serverless pendurada e o Set `seen` crescer sem limite.
+const MAX_CONNECTION_MS = 5 * 60 * 1000;
+const MAX_SEEN = 500;
 
 // SSE lendo do Redis por polling curto do lado do servidor (Upstash REST
 // não tem SUBSCRIBE nativo de pub/sub). Mais simples de manter num
@@ -19,19 +27,43 @@ export async function GET(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      let closed = false;
+      let interval: ReturnType<typeof setInterval> | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        if (interval) clearInterval(interval);
+        if (timeout) clearTimeout(timeout);
+        try {
+          controller.close();
+        } catch {
+          // já fechado
+        }
+      };
+
       const send = (event: string, data: unknown) => {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          close(); // cliente desconectou
+        }
       };
 
       send("connected", { ok: true });
 
-      const interval = setInterval(async () => {
+      const poll = async () => {
         for (const channel of CHANNELS) {
+          if (closed) return;
           try {
             const events = await readRecentEvents(channel, 10);
             for (const event of events.reverse()) {
-              const key = `${channel}:${event.ts}`;
+              // a chave inclui o conteúdo: dois eventos com o mesmo `ts` não se apagam
+              const key = `${channel}:${event.ts}:${JSON.stringify(event)}`;
               if (!seen.has(key)) {
+                if (seen.size >= MAX_SEEN) seen.delete(seen.values().next().value as string);
                 seen.add(key);
                 send(channel, event);
               }
@@ -40,12 +72,12 @@ export async function GET(req: NextRequest) {
             // Redis indisponível momentaneamente — próximo poll tenta de novo.
           }
         }
-      }, POLL_INTERVAL_MS);
+      };
 
-      req.signal.addEventListener("abort", () => {
-        clearInterval(interval);
-        controller.close();
-      });
+      interval = setInterval(poll, POLL_INTERVAL_MS);
+      timeout = setTimeout(close, MAX_CONNECTION_MS);
+
+      req.signal.addEventListener("abort", close);
     },
   });
 

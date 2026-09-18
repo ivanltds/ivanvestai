@@ -4,7 +4,17 @@ import { cookies } from "next/headers";
 const SESSION_COOKIE = "ivanvestai_session";
 
 function secretKey() {
-  return new TextEncoder().encode(process.env.SESSION_SECRET ?? "dev-secret-troque-isso");
+  const secret = process.env.SESSION_SECRET;
+  if (!secret || secret.length < 32) {
+    // Em produção NUNCA cai num segredo padrão: qualquer um forjaria um cookie de
+    // sessão válido e teria acesso a /api/commands e /api/settings (que podem
+    // ligar o bot). Só em desenvolvimento local há fallback.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("SESSION_SECRET ausente ou curto demais (mínimo 32 caracteres) -- configure na Vercel.");
+    }
+    return new TextEncoder().encode(secret || "dev-secret-troque-isso-apenas-em-desenvolvimento");
+  }
+  return new TextEncoder().encode(secret);
 }
 
 export async function createSession(email: string) {
@@ -30,6 +40,8 @@ export async function getSession(): Promise<{ email: string } | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secretKey());
+    // Token de magic link (curto, 15 min) não pode valer como cookie de sessão.
+    if (payload.purpose === "magic_link") return null;
     return { email: payload.email as string };
   } catch {
     return null;

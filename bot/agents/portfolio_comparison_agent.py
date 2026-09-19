@@ -10,7 +10,7 @@ from agents.market_scanner_agent import ScannerOpportunity
 from config.settings import settings
 from core.binance_client import binance_client
 from core.indicators import rolling_correlation
-from core.risk_rules import correlation_ok, max_allocation_ok, sector_of
+from core.risk_rules import correlation_ok, max_allocation_ok, sector_of, suggested_order_value
 from db.models import Position
 
 
@@ -37,31 +37,30 @@ class PortfolioComparisonAgent(BaseAgent):
 
         base_asset = opportunity.pair.removesuffix(settings.safety_stablecoin)
 
-        # 1. Tamanho máximo por operação (50% do capital disponível)
-        suggested_value = total_equity_usdt * settings.max_allocation_pct_per_trade
+        # 1. Tamanho da operação: até `max_allocation_pct_per_trade` do patrimônio
+        # TOTAL, limitado ao saldo LIVRE na stablecoin de segurança (a maior parte
+        # do patrimônio pode estar em outros ativos, não em USDT disponível --
+        # -2010 "insufficient balance" na primeira ordem real, ver
+        # arquitetura-tecnica.md 9.13). Antes, valor acima do saldo livre
+        # REPROVAVA a oportunidade; agora a ordem é reduzida pra caber, e só é
+        # reprovada se ficar abaixo do mínimo da Binance (checagem 2).
+        uncapped_value = total_equity_usdt * settings.max_allocation_pct_per_trade
+        suggested_value = suggested_order_value(
+            total_equity_usdt, settings.max_allocation_pct_per_trade, available_stablecoin
+        )
         if not max_allocation_ok(suggested_value, total_equity_usdt, settings.max_allocation_pct_per_trade):
             approved = False
             reasons.append("Valor sugerido excede o teto de alocação por operação.")
-
-        # 1b. Saldo LIVRE na stablecoin de segurança (não o patrimônio total).
-        # O valor sugerido acima é uma % do patrimônio TOTAL, mas a maior
-        # parte dele pode estar em outros ativos (BTC, ETH etc), não em USDT
-        # disponível de verdade pra comprar algo novo -- sem essa checagem, a
-        # ordem só falhava lá na Binance (-2010 "insufficient balance"),
-        # depois de já ter gasto a chamada de LLM do RiskCommitteeAgent.
-        # Achado em 16/09/2026 rodando em produção pela primeira vez, ver
-        # arquitetura-tecnica.md 9.13.
-        if available_stablecoin is not None and suggested_value > available_stablecoin:
-            approved = False
+        elif suggested_value < uncapped_value:
             reasons.append(
-                f"Saldo livre em {settings.safety_stablecoin} (${available_stablecoin:.2f}) "
-                f"insuficiente pro valor sugerido (${suggested_value:.2f})."
+                f"Valor reduzido de ${uncapped_value:.2f} pra ${suggested_value:.2f} pra caber no saldo livre "
+                f"em {settings.safety_stablecoin} (${available_stablecoin:.2f})."
             )
 
         # 2. Valor mínimo de ordem da Binance (minNotional)
         try:
             filters = binance_client.get_symbol_filters(opportunity.pair)
-            min_notional = float(filters.get("MIN_NOTIONAL", {}).get("minNotional", 5.0))
+            min_notional = float((filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}).get("minNotional", 5.0))
         except Exception:
             min_notional = 5.0
         if suggested_value < min_notional:

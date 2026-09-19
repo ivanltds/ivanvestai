@@ -18,6 +18,7 @@ from agents.viability_agent import ViabilityAgent
 from core import redis_bridge, vlog
 from core.binance_client import binance_client
 from core.config_store import load_runtime_config
+from core.logging_setup import cycle_id_var
 from core.notifier import alert
 from core.risk_rules import circuit_breaker_triggered, in_macro_risk_window, round_step_size
 from config.settings import settings
@@ -26,6 +27,10 @@ from db.session import get_session
 from orchestrator.reconciliation import has_divergence, reconcile
 
 logger = logging.getLogger("ivanvestai.cycle_runner")
+
+# Piso conservador do valor mínimo de ordem da Binance (a maioria dos pares USDT
+# exige US$5; o valor exato por par é checado no PortfolioComparisonAgent).
+MIN_ORDER_VALUE_USDT = 5.0
 
 
 async def run_cycle(*, ignore_macro_window: bool = False) -> None:
@@ -56,6 +61,7 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
         return
 
     cycle_id = str(uuid.uuid4())
+    cycle_token = cycle_id_var.set(cycle_id)  # cada linha de log (arquivo/banco) sai marcada com o ciclo
     now = dt.datetime.now(dt.timezone.utc)
 
     try:
@@ -181,6 +187,7 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
 
     finally:
         redis_bridge.release_cycle_lock()
+        cycle_id_var.reset(cycle_token)
 
 
 async def _safe_manage_open_positions() -> None:
@@ -214,6 +221,17 @@ async def _evaluate_opportunities(
     opportunities = sorted(opportunities, key=lambda o: o.confluence, reverse=True)
 
     for opp in opportunities:
+        # Sem saldo livre pra uma ordem mínima, nenhuma oportunidade restante pode
+        # virar entrada -- não gasta chamadas de API avaliando-as (nos logs de
+        # 18/09/2026, depois da 1ª compra o saldo caiu pra $0,62 e o ciclo seguiu
+        # reprovando dezenas de oportunidades uma a uma).
+        if available_stablecoin < MIN_ORDER_VALUE_USDT:
+            vlog.warn(
+                f"Saldo livre (${available_stablecoin:,.2f}) abaixo do mínimo de ordem "
+                f"(${MIN_ORDER_VALUE_USDT:.0f}) — sem novas entradas neste ciclo."
+            )
+            return
+
         if deadline is not None and time.monotonic() > deadline:
             logger.warning("Prazo de decisão de entrada estourado — oportunidades restantes ficam pro próximo ciclo.")
             vlog.warn("Prazo de decisão de entrada estourado — oportunidades restantes ficam pro próximo ciclo.")
@@ -223,17 +241,26 @@ async def _evaluate_opportunities(
         vlog.step("🔎", "Oportunidade", f"{opp.pair} ({opp.strategy}, regime={opp.regime})")
         relevant_news = [n for n in news_items if opp.pair.replace("USDT", "") in n.title_original.upper()]
 
-        viability_verdict = await asyncio.to_thread(viability_agent.evaluate, opp, relevant_news)
-        vlog.step("🧭", "ViabilityAgent", f"{viability_verdict.decision} (confiança={viability_verdict.confidence:.0%})")
+        # Portfólio (regras determinísticas, sem LLM) ANTES do ViabilityAgent
+        # (gpt-4o): se reprovou por regra dura (saldo, minNotional, correlação) o
+        # comitê veta de qualquer jeito, então a chamada de LLM seria custo puro
+        # -- nos logs de 18/09/2026 eram dezenas de chamadas por ciclo (x96 ciclos/dia).
         portfolio_check = await asyncio.to_thread(
             portfolio_agent.check, opp, total_equity, open_positions, available_stablecoin
         )
-        vlog.step("🛡️", "PortfolioComparisonAgent", "aprovado" if portfolio_check.approved else "reprovado")
+        if not portfolio_check.approved:
+            reasons_text = "; ".join(portfolio_check.reasons)
+            vlog.step("🛡️", "PortfolioComparisonAgent", f"reprovado — {reasons_text}")
+            _record_portfolio_rejection(cycle_id, opp, portfolio_agent, risk_committee, reasons_text)
+            redis_bridge.publish_event("decisions", {"pair": opp.pair, "approved": False, "confidence": 0.0})
+            continue
+        vlog.step("🛡️", "PortfolioComparisonAgent", f"aprovado — {'; '.join(portfolio_check.reasons)}")
 
-        # Só reconcilia quando o portfólio APROVOU: se ele reprovou por regra dura
-        # (saldo, minNotional, correlação), o comitê veta de qualquer jeito e a
-        # chamada extra de LLM seria custo puro.
-        if portfolio_check.approved and has_divergence(viability_verdict, portfolio_check):
+        viability_verdict = await asyncio.to_thread(viability_agent.evaluate, opp, relevant_news)
+        vlog.step("🧭", "ViabilityAgent", f"{viability_verdict.decision} (confiança={viability_verdict.confidence:.0%})")
+
+        # Aqui o portfólio já aprovou; reconcilia só se o ViabilityAgent discordar.
+        if has_divergence(viability_verdict, portfolio_check):
             viability_verdict = await asyncio.to_thread(
                 reconcile, viability_agent, opp, viability_verdict, portfolio_check
             )
@@ -362,6 +389,30 @@ async def _evaluate_opportunities(
                     "alerts", {"type": "execution_error", "pair": opp.pair, "message": str(exc)}
                 )
                 continue
+
+
+def _record_portfolio_rejection(
+    cycle_id: str, opp, portfolio_agent: PortfolioComparisonAgent, risk_committee: RiskCommitteeAgent, reasons_text: str
+) -> None:
+    """Registra uma oportunidade barrada pelas regras de portfólio, sem passar
+    pelo ViabilityAgent/LLM (não há linha de viabilidade nesse caso)."""
+    with get_session() as session:
+        opportunity_row = Opportunity(
+            cycle_id=cycle_id, pair=opp.pair, strategy=opp.strategy, market_regime=opp.regime,
+            indicators_json=opp.votes_summary, status="rejected", final_confidence=0.0,
+        )
+        session.add(opportunity_row)
+        session.flush()
+        session.add(CommitteeDecision(
+            opportunity_id=opportunity_row.id, agent_name=portfolio_agent.name,
+            decision="reject", confidence=0.0, reasoning=reasons_text, model_used="rule-based",
+        ))
+        session.add(CommitteeDecision(
+            opportunity_id=opportunity_row.id, agent_name=risk_committee.name,
+            decision="reject", confidence=0.0,
+            reasoning=f"Vetado pelas regras de portfólio (sem chamada de LLM): {reasons_text}",
+            model_used="rule-based",
+        ))
 
 
 def _review_wallet_positions(wallet_snapshots: list[WalletSnapshot]) -> None:

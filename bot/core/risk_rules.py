@@ -40,6 +40,26 @@ def max_allocation_ok(order_value: float, total_equity: float, max_pct: float) -
     return (order_value / total_equity) <= max_pct
 
 
+# Folga sobre o saldo livre: a taxa (0,1%) e o slippage de uma ordem a mercado
+# podem fazer o custo real passar um pouco do valor calculado; sem isso a ordem
+# que usa "todo" o saldo livre volta com -2010 (insufficient balance).
+FREE_BALANCE_BUFFER = 0.98
+
+
+def suggested_order_value(total_equity: float, max_pct: float, available: float | None = None) -> float:
+    """Valor (em stablecoin) sugerido pra uma ordem: `max_pct` do patrimônio
+    TOTAL, mas nunca mais que o saldo LIVRE (com folga pra taxa/slippage).
+
+    Antes o valor era só `max_pct` do patrimônio e a oportunidade era REPROVADA
+    se passasse do saldo livre -- com patrimônio de $62,64 e $30,43 livres
+    (50% = $31,4) o bot reprovava tudo por menos de US$1 de diferença
+    (achado nos logs de 18/09/2026)."""
+    value = total_equity * max_pct
+    if available is not None:
+        value = min(value, max(available, 0.0) * FREE_BALANCE_BUFFER)
+    return value
+
+
 def round_step_size(quantity: float, step_size: float) -> float:
     """Arredonda `quantity` PRA BAIXO pro múltiplo válido do filtro LOT_SIZE
     da Binance (`stepSize`) -- obrigatório pra Binance aceitar a ordem.

@@ -73,6 +73,16 @@ export async function POST(req: NextRequest) {
   }
 
   await clearRateLimit(ip);
-  await createSession(email);
+  try {
+    await createSession(email);
+  } catch (err) {
+    // Tipicamente SESSION_SECRET ausente/curto em produção (lib/auth.ts). Sem este
+    // aviso o usuário só via um 500 genérico e achava que a senha estava errada.
+    console.error("Falha ao criar sessão:", err);
+    return NextResponse.json(
+      { error: "Servidor mal configurado: SESSION_SECRET ausente ou com menos de 32 caracteres." },
+      { status: 500 }
+    );
+  }
   return NextResponse.json({ ok: true });
 }

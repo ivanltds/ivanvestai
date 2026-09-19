@@ -17,8 +17,11 @@ export default function LoginPage() {
     });
     if (res.ok) {
       window.location.href = "/dashboard";
-    } else {
+    } else if (res.status === 401) {
       setStatus("Senha incorreta.");
+    } else {
+      const data = await res.json().catch(() => null);
+      setStatus(data?.error ?? "Erro ao entrar. Tente de novo.");
     }
   }
 

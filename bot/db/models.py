@@ -9,6 +9,7 @@ import uuid
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -222,3 +223,19 @@ class ApiCostLog(Base):
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class BotLog(Base):
+    """Log do bot (arquivo + esta tabela) pra consulta/análise de desempenho
+    e diagnóstico. Escrito em lote por uma thread de fundo (core/logging_setup.py)
+    -- nunca bloqueia nem derruba o ciclo. Retenção: LOG_RETENTION_DAYS (padrão 30)."""
+
+    __tablename__ = "bot_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    level: Mapped[str] = mapped_column(String, nullable=False, index=True)  # DEBUG|INFO|WARNING|ERROR|CRITICAL
+    logger: Mapped[str] = mapped_column(String, nullable=False)  # ex: ivanvestai.cycle_runner, ivanvestai.vlog
+    cycle_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=True)  # modo do bot quando a linha foi gerada
+    message: Mapped[str] = mapped_column(Text, nullable=False)

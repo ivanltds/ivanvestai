@@ -13,11 +13,13 @@ import uuid
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from config.settings import settings
 from core import redis_bridge
 from core.config_store import load_runtime_config
+from core.logging_setup import configure_logging
 from orchestrator.cycle_runner import run_cycle
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+configure_logging()  # console + arquivo diário (bot/logs) + tabela bot_logs no Postgres
 logger = logging.getLogger("ivanvestai.main")
 
 CYCLE_JOB_ID = "committee_cycle"
@@ -127,8 +129,8 @@ async def amain() -> None:
 
     scheduler.start()
     logger.info(
-        "IvanVestAI bot iniciado. Ciclo a cada %s min. bot_status atual: %s",
-        config.cycle_interval_minutes, config.bot_status,
+        "IvanVestAI bot iniciado. Ciclo a cada %s min. bot_status atual: %s. dry_run=%s",
+        config.cycle_interval_minutes, config.bot_status, settings.dry_run,
     )
 
     try:

@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # deliberadamente mais difícil de fazer sem querer.
     dry_run: bool = True
 
+    # Logs (ver core/logging_setup.py): um arquivo por dia em `log_dir` + tabela bot_logs no Postgres.
+    log_dir: str = "logs"  # relativo a bot/ (ou caminho absoluto)
+    log_retention_days: int = 30
+    log_to_db: bool = True
+
     # Parâmetros operacionais (defaults — sobrescritos pela tabela settings quando presentes)
     cycle_interval_minutes: int = 15
     # Orçamento de tempo pra AVALIAR oportunidades de entrada (LLM). Checado entre

@@ -23,6 +23,7 @@ Regras de design:
 """
 from __future__ import annotations
 
+import logging
 import os
 import random
 import sys
@@ -46,6 +47,20 @@ _CODES = {
 
 WIDTH = 72
 
+# Cada linha impressa aqui também vai (em texto puro, sem ANSI) pro logging --
+# é assim que o log visual chega no arquivo diário e na tabela bot_logs. O
+# NullHandler evita o "lastResort" do logging imprimir de novo em scripts que
+# não configuram handlers (run_paper_trading.py etc.).
+_LOG = logging.getLogger("ivanvestai.vlog")
+_LOG.addHandler(logging.NullHandler())
+
+
+def _log(level: int, text: str) -> None:
+    try:
+        _LOG.log(level, text)
+    except Exception:  # log é só cosmético/observabilidade, nunca derruba o bot
+        pass
+
 
 def _c(text: str, color: str | None = None, bold: bool = False) -> str:
     if not _USE_COLOR or not (color or bold):
@@ -60,6 +75,7 @@ def _c(text: str, color: str | None = None, bold: bool = False) -> str:
 
 def banner(title: str, subtitle: str = "", color: str = "cyan") -> None:
     """Caixa grande -- só pra início/fim de ciclo, não pra toda hora."""
+    _log(logging.INFO, f"== {title} | {subtitle} ==" if subtitle else f"== {title} ==")
     top = "╔" + "═" * (WIDTH - 2) + "╗"
     bottom = "╚" + "═" * (WIDTH - 2) + "╝"
     print(_c(top, color, bold=True))
@@ -78,6 +94,7 @@ def _boxed(text: str, color: str, bold: bool = False) -> None:
 
 def section(title: str, emoji: str = "▶", color: str = "blue") -> None:
     """Linha divisória de seção (ex: 'Passo 1 -- Coleta')."""
+    _log(logging.INFO, f"-- {title} --")
     label = f" {emoji} {title} "
     fill = "─" * max(4, WIDTH - len(label))
     print()
@@ -85,30 +102,37 @@ def section(title: str, emoji: str = "▶", color: str = "blue") -> None:
 
 
 def step(emoji: str, agent: str, msg: str, color: str = "cyan") -> None:
+    _log(logging.INFO, f"{agent}: {msg}")
     print(f"  {emoji} {_c(agent + ':', color, bold=True)} {msg}")
 
 
 def ok(msg: str) -> None:
+    _log(logging.INFO, f"OK {msg}")
     print(f"  {_c('✔', 'green', bold=True)} {msg}")
 
 
 def warn(msg: str) -> None:
+    _log(logging.WARNING, msg)
     print(f"  {_c('⚠', 'yellow', bold=True)}  {msg}")
 
 
 def fail(msg: str) -> None:
+    _log(logging.ERROR, msg)
     print(f"  {_c('✘', 'red', bold=True)} {msg}")
 
 
 def money(msg: str) -> None:
+    _log(logging.INFO, f"$$ {msg}")
     print(f"  {_c('💰', 'green')} {msg}")
 
 
 def entry(msg: str) -> None:
+    _log(logging.INFO, f"ENTRADA {msg}")
     print(f"  {_c('🎯 ENTRADA', 'green', bold=True)} {msg}")
 
 
 def exit_(msg: str, positive: bool) -> None:
+    _log(logging.INFO, f"SAIDA {msg}")
     tag = _c("🚪 SAÍDA", "green" if positive else "red", bold=True)
     print(f"  {tag} {msg}")
 

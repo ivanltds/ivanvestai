@@ -18,6 +18,7 @@ from agents.viability_agent import ViabilityAgent
 from core import redis_bridge, vlog
 from core.binance_client import binance_client
 from core.config_store import load_runtime_config
+from core.equity import daily_market_pnl_usdt
 from core.logging_setup import cycle_id_var
 from core.notifier import alert
 from core.risk_rules import circuit_breaker_triggered, in_macro_risk_window, round_step_size
@@ -190,19 +191,37 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
         cycle_id_var.reset(cycle_token)
 
 
-async def _safe_manage_open_positions() -> None:
+# Um único "gestor" por vez: o ciclo (15 min) e o monitor rápido (60s) chamam a mesma
+# gestão, e dois vendendo a mesma posição ao mesmo tempo gerariam ordem duplicada.
+_manage_lock = asyncio.Lock()
+_last_management_error: dict[str, tuple[str, float]] = {}
+
+
+async def _safe_manage_open_positions(quiet: bool = False) -> None:
     """Gestão de posições abertas em thread (não bloqueia o event loop) e com
     rede de segurança: qualquer erro fora do loop por posição (ex: falha na
     query inicial) não pode impedir o ciclo de seguir/liberar o lock. Ver
     arquitetura-tecnica.md 9.14."""
-    try:
-        await asyncio.to_thread(_manage_open_positions)
-    except Exception:
-        logger.exception("Erro inesperado gerenciando posições abertas.")
-        vlog.fail("Erro inesperado gerenciando posições abertas — ciclo segue mesmo assim.")
-        redis_bridge.publish_event(
-            "alerts", {"type": "cycle_error", "message": "Erro inesperado gerenciando posições abertas"}
-        )
+    async with _manage_lock:
+        try:
+            await asyncio.to_thread(_manage_open_positions, quiet)
+        except Exception:
+            logger.exception("Erro inesperado gerenciando posições abertas.")
+            vlog.fail("Erro inesperado gerenciando posições abertas — ciclo segue mesmo assim.")
+            redis_bridge.publish_event(
+                "alerts", {"type": "cycle_error", "message": "Erro inesperado gerenciando posições abertas"}
+            )
+
+
+async def monitor_open_positions() -> None:
+    """Monitor rápido (a cada `risk_monitor_seconds`, padrão 60s), entre os ciclos de
+    15 min: só confere stop/take/trailing das posições abertas -- não coleta, não usa
+    LLM. Antes o stop só era checado a cada 15 min, então uma queda rápida passava do
+    stop sem reação (revisão de 19/09/2026). Se o ciclo (ou outro monitor) já está
+    gerindo as posições, pula esta rodada."""
+    if _manage_lock.locked():
+        return
+    await _safe_manage_open_positions(quiet=True)
 
 
 async def _evaluate_opportunities(
@@ -428,15 +447,19 @@ def _review_wallet_positions(wallet_snapshots: list[WalletSnapshot]) -> None:
         vlog.ok(f"{len(reviews)} posição(ões) revisada(s), {sold} venda(s) executada(s).")
 
 
-def _manage_open_positions() -> None:
+def _manage_open_positions(quiet: bool = False) -> None:
     """Checa stop/take/trailing e a flag de venda manual das posições abertas.
-    Sem timeout — decisão de saída pode ser mais deliberada."""
+    Sem timeout — decisão de saída pode ser mais deliberada.
+
+    `quiet=True` (monitor rápido a cada minuto): só loga quando há saída ou erro --
+    "seguindo aberta" a cada 60s encheria arquivo e tabela bot_logs de ruído."""
     execution_agent = ExecutionAgent()
     with get_session() as session:
         positions = session.query(Position).filter_by(status="open").all()
 
     if not positions:
-        vlog.ok("Nenhuma posição aberta pra gerenciar.")
+        if not quiet:
+            vlog.ok("Nenhuma posição aberta pra gerenciar.")
         return
 
     for position in positions:
@@ -482,17 +505,30 @@ def _manage_open_positions() -> None:
                 continue
 
             execution_agent.update_trailing_stop(position, current_price)
-            vlog.step("👀", position.pair, f"seguindo aberta @ ~${current_price:,.4f}, sem gatilho de saída.")
+            if not quiet:
+                vlog.step("👀", position.pair, f"seguindo aberta @ ~${current_price:,.4f}, sem gatilho de saída.")
         except Exception as exc:
-            logger.error("Falha ao gerenciar posição %s (id=%s): %s", position.pair, position.id, exc)
-            vlog.fail(f"Falha ao gerenciar {position.pair}: {exc} — posição mantida, seguindo pras outras.")
-            redis_bridge.publish_event(
-                "alerts", {"type": "position_management_error", "pair": position.pair, "message": str(exc)}
-            )
+            # Com o monitor rodando a cada minuto, uma venda que falha repetiria o
+            # mesmo erro/alerta 60x por hora: só registra de novo se a mensagem mudou
+            # ou passaram 15 min desde o último aviso desta posição.
+            now_mono = time.monotonic()
+            last = _last_management_error.get(str(position.id))
+            if last is None or last[0] != str(exc) or now_mono - last[1] > 900:
+                _last_management_error[str(position.id)] = (str(exc), now_mono)
+                logger.error("Falha ao gerenciar posição %s (id=%s): %s", position.pair, position.id, exc)
+                vlog.fail(f"Falha ao gerenciar {position.pair}: {exc} — posição mantida, seguindo pras outras.")
+                redis_bridge.publish_event(
+                    "alerts", {"type": "position_management_error", "pair": position.pair, "message": str(exc)}
+                )
             continue
 
 
 def _check_circuit_breaker(total_equity_now: float, alert_pct: float) -> None:
+    """Alerta de perda diária baseado no P&L de MERCADO do dia (core/equity.py), não na
+    diferença bruta de patrimônio: aportes e retiradas manuais não contam como perda
+    (achado em 19/09/2026: alerta de "-28%" causado por US$26,6 em NEAR movidos pra fora
+    da conta, sem trade nenhum). O e-mail/push sai UMA vez por dia; nos ciclos seguintes
+    a situação só aparece no log."""
     today = dt.date.today()
     with get_session() as session:
         row = session.get(DailyEquity, today)
@@ -501,15 +537,19 @@ def _check_circuit_breaker(total_equity_now: float, alert_pct: float) -> None:
             return
         start_of_day_equity = row.equity_usdt
 
-    if circuit_breaker_triggered(start_of_day_equity, total_equity_now, alert_pct):
-        alert(
-            "Circuit breaker: perda diária relevante",
-            f"Equity caiu de {start_of_day_equity:.2f} para {total_equity_now:.2f} USDT "
-            f"(limite de alerta: {alert_pct:.0%}). Isso é só um aviso — o bot continua operando "
-            "normalmente, conforme configurado.",
-        )
-        vlog.fail(f"Circuit breaker: equity caiu de ${start_of_day_equity:,.2f} pra ${total_equity_now:,.2f} "
-                  f"(limite de alerta: {alert_pct:.0%}). Só um aviso — o bot segue operando normalmente.")
-        redis_bridge.publish_event("alerts", {"type": "circuit_breaker", "equity_now": total_equity_now})
+    pnl_today = daily_market_pnl_usdt(today)
+    pnl_pct = pnl_today / start_of_day_equity if start_of_day_equity > 0 else 0.0
+
+    if circuit_breaker_triggered(start_of_day_equity, start_of_day_equity + pnl_today, alert_pct):
+        msg = (f"Circuit breaker: variação de MERCADO hoje ${pnl_today:+,.2f} ({pnl_pct:+.1%}) sobre "
+               f"${start_of_day_equity:,.2f} no início do dia (limite de alerta: {alert_pct:.0%}). "
+               "Aportes/retiradas não contam. Só um aviso — o bot segue operando.")
+        if redis_bridge.once_per_day(f"circuit_breaker:{today.isoformat()}"):
+            alert("Circuit breaker: perda diária relevante", msg)
+            vlog.fail(msg)
+            redis_bridge.publish_event("alerts", {"type": "circuit_breaker", "pnl_today": pnl_today})
+        else:
+            vlog.warn(f"Circuit breaker ainda acima do limite hoje (alerta já enviado): "
+                      f"variação de mercado ${pnl_today:+,.2f} ({pnl_pct:+.1%}).")
     else:
-        vlog.ok("Circuit breaker: dentro do limite diário de perda.")
+        vlog.ok(f"Circuit breaker: variação de mercado hoje ${pnl_today:+,.2f} ({pnl_pct:+.1%}) — dentro do limite.")

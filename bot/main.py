@@ -17,7 +17,7 @@ from config.settings import settings
 from core import redis_bridge
 from core.config_store import load_runtime_config
 from core.logging_setup import configure_logging
-from orchestrator.cycle_runner import run_cycle
+from orchestrator.cycle_runner import monitor_open_positions, run_cycle
 
 configure_logging()  # console + arquivo diário (bot/logs) + tabela bot_logs no Postgres
 logger = logging.getLogger("ivanvestai.main")
@@ -122,15 +122,24 @@ async def amain() -> None:
     # disparava sozinho -- nem na largada, nem no intervalo. Corrigido
     # passando o "agora" de verdade, que é o comportamento que o comentário
     # original já descrevia (dispara já, depois a cada N min).
+    # misfire_grace_time/coalesce: o event loop fica ocupado durante o ciclo e o
+    # padrão do APScheduler (1s de tolerância) descartava rodadas dos jobs curtos
+    # ("Run time of job ... was missed by ...", visto nos logs de 18/09/2026).
     scheduler.add_job(run_cycle, "interval", minutes=config.cycle_interval_minutes, id=CYCLE_JOB_ID,
-                       next_run_time=dt.datetime.now(dt.timezone.utc))
-    scheduler.add_job(process_pending_commands, "interval", seconds=15, id="command_drain")
-    scheduler.add_job(sync_cycle_interval, "interval", seconds=60, id="interval_sync", args=[scheduler])
+                       next_run_time=dt.datetime.now(dt.timezone.utc), misfire_grace_time=300, coalesce=True)
+    scheduler.add_job(process_pending_commands, "interval", seconds=15, id="command_drain",
+                       misfire_grace_time=30, coalesce=True)
+    scheduler.add_job(sync_cycle_interval, "interval", seconds=60, id="interval_sync", args=[scheduler],
+                       misfire_grace_time=60, coalesce=True)
+    # Monitor rápido: stop/take/trailing entre os ciclos de 15 min (0 desliga).
+    if settings.risk_monitor_seconds > 0:
+        scheduler.add_job(monitor_open_positions, "interval", seconds=settings.risk_monitor_seconds,
+                           id="position_monitor", misfire_grace_time=30, coalesce=True, max_instances=1)
 
     scheduler.start()
     logger.info(
-        "IvanVestAI bot iniciado. Ciclo a cada %s min. bot_status atual: %s. dry_run=%s",
-        config.cycle_interval_minutes, config.bot_status, settings.dry_run,
+        "IvanVestAI bot iniciado. Ciclo a cada %s min, monitor de stop/take a cada %ss. bot_status atual: %s. dry_run=%s",
+        config.cycle_interval_minutes, settings.risk_monitor_seconds, config.bot_status, settings.dry_run,
     )
 
     try:

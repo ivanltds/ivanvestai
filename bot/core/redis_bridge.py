@@ -67,6 +67,17 @@ def drain_commands() -> list[dict[str, Any]]:
     return commands
 
 
+# --- Alerta 1x por dia ------------------------------------------------------
+
+def once_per_day(key: str) -> bool:
+    """True na primeira chamada do dia pra essa `key` (SET NX com validade de 24h).
+    Se o Redis falhar, devolve True (melhor um alerta repetido do que nenhum)."""
+    try:
+        return bool(_client().set(f"once:{key}", "1", nx=True, ex=24 * 3600))
+    except Exception:
+        return True
+
+
 # --- Lock de ciclo --------------------------------------------------------
 
 _lock_token: str | None = None

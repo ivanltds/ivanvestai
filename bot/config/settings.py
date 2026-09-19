@@ -77,8 +77,17 @@ class Settings(BaseSettings):
     # segundos depois de abrir a posição. Não substitui a decisão do agente
     # (que continua livre pra propor algo mais largo) -- só evita esse caso
     # degenerado de stop/take grudado no preço de entrada.
-    min_stop_loss_pct: float = 1.0
-    min_take_profit_pct: float = 1.5
+    #
+    # Revisão de 19/09/2026: análise contra dados da Binance (analyze_decisions_vs_market.py)
+    # mostrou que stop de 1% / take de 1,5% ficam dentro do ruído do preço (net ~0 depois de
+    # 0,2% de taxas). Pisos subidos pra 2% / 4% (relação 2:1) como EXPERIMENTO -- continuam configuráveis
+    # via .env (MIN_STOP_LOSS_PCT / MIN_TAKE_PROFIT_PCT) e a análise deve ser reexecutada
+    # conforme os dados amadurecem. Só valem pra posições NOVAS (stop/take já gravados não mudam).
+    min_stop_loss_pct: float = 2.0
+    min_take_profit_pct: float = 4.0
+    # Intervalo do monitor rápido de stop/take/trailing das posições abertas (entre os
+    # ciclos de 15 min). 0 desliga. Ver orchestrator/cycle_runner.monitor_open_positions.
+    risk_monitor_seconds: int = 60
     max_allocation_pct_per_trade: float = 0.50
     daily_loss_alert_pct: float = 0.10
     top_n_pairs: int = 100

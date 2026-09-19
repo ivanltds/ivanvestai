@@ -88,8 +88,15 @@ export default async function DashboardPage() {
   // Snapshot mais recente por ativo (não a série histórica inteira) -- é o
   // retrato da carteira real na última vez que o PortfolioAgent rodou.
   const walletRows = await query<WalletRow>(
+    // Só o ÚLTIMO lote (o snapshot de um ciclo inteiro). O PortfolioAgent grava
+    // apenas os ativos com saldo > 0, então um `distinct on (asset)` sobre todo o
+    // histórico mantinha "fantasmas": ativos já vendidos (ex: SUI, XRP) apareciam
+    // com o último valor que tinham e inflavam o total (achado em 19/09/2026:
+    // dashboard $82,76 vs Binance $63,00). Um lote = linhas até 2 min antes do
+    // snapshot mais recente (um ciclo grava tudo em poucos segundos).
     `select distinct on (asset) asset, quantity, value_usdt, avg_buy_price, timestamp
      from wallet_snapshots
+     where timestamp >= (select max(timestamp) from wallet_snapshots) - interval '2 minutes'
      order by asset, timestamp desc`
   );
 

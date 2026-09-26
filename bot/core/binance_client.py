@@ -118,6 +118,31 @@ class BinanceClient:
             api_secret if api_secret is not None else settings.binance_api_secret,
             requests_params={"timeout": 20},
         )
+        self._sync_time_offset()
+
+    def _sync_time_offset(self) -> None:
+        """Corrige o erro -1021 (timestamp fora do recvWindow) na raiz, em vez
+        de depender de alguém lembrar de sincronizar o relógio do Windows
+        manualmente (achado em produção em 26/09/2026 -- ver multi-conta-plano.md
+        10.20 -- derrubou a leitura de carteira das DUAS contas no mesmo ciclo).
+        Consulta o horário do servidor da Binance (endpoint público
+        `get_server_time`, não exige assinatura -- funciona mesmo com o relógio
+        local bem torto) e grava a diferença em `self._client.timestamp_offset`,
+        que o python-binance soma a todo timestamp de chamada assinada a partir
+        daqui. Como um `BinanceClient` novo é construído a cada ciclo (uma vez
+        por conta ativa, ver `core/account_context.py`), isso resincroniza
+        sozinho todo ciclo -- se o relógio do Windows dessincronizar nesse
+        meio-tempo (ex: depois de hibernar), o ciclo seguinte já se autocorrige,
+        sem precisar reiniciar o bot.
+        Best-effort: se a própria consulta falhar (ex: rede fora do ar bem na
+        hora de construir o client), não derruba a inicialização -- só segue
+        sem correção, igual ao comportamento de antes desta mudança."""
+        try:
+            server_time_ms = self._client.get_server_time()["serverTime"]
+            local_time_ms = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+            self._client.timestamp_offset = server_time_ms - local_time_ms
+        except Exception:
+            pass
 
     @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_account_balances(self) -> list[dict]:

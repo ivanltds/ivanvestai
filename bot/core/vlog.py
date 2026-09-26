@@ -160,8 +160,21 @@ def joke() -> None:
     print(_c(f"  🎲 {random.choice(_JOKES)}", "magenta"))
 
 
-def cycle_banner(cycle_id: str, dry_run: bool) -> None:
-    mode = "DRY-RUN 🧪 (simulado, capital zero em risco)" if dry_run else "⚠️  CAPITAL REAL EM JOGO ⚠️"
-    banner("🤖  IVANVESTAI — CICLO DO COMITÊ", f"{mode}  |  ciclo {cycle_id[:8]}",
-           color="green" if dry_run else "red")
+def cycle_banner(cycle_id: str, accounts: list[tuple[str, bool]]) -> None:
+    """`accounts`: [(label, dry_run), ...] de cada conta ativa (multi-conta-plano.md,
+    Fase C) -- achado em 25/09/2026: com 2+ contas cada uma com seu próprio dry_run,
+    um único bool global no banner podia mentir (ex: mostrar "simulado, capital zero
+    em risco" com uma das contas já operando capital real). Agora resume o estado de
+    TODAS as contas ativas do ciclo."""
+    if not accounts:
+        mode, color = "⚠️  NENHUMA CONTA ATIVA ⚠️", "red"
+    elif all(dry_run for _, dry_run in accounts):
+        mode, color = "DRY-RUN 🧪 (simulado, capital zero em risco)", "green"
+    elif all(not dry_run for _, dry_run in accounts):
+        suffix = "" if len(accounts) == 1 else f" — {len(accounts)} conta(s)"
+        mode, color = f"⚠️  CAPITAL REAL EM JOGO{suffix} ⚠️", "red"
+    else:
+        per_account = ", ".join(f"{label}={'sim' if dry_run else 'REAL'}" for label, dry_run in accounts)
+        mode, color = f"⚠️  MISTO — {per_account} ⚠️", "red"
+    banner("🤖  IVANVESTAI — CICLO DO COMITÊ", f"{mode}  |  ciclo {cycle_id[:8]}", color=color)
     joke()

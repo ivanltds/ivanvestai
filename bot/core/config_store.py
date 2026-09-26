@@ -5,11 +5,16 @@ recentes sem precisar reiniciar o processo.
 """
 from __future__ import annotations
 
+import logging
+import uuid
 from dataclasses import dataclass
 
 from config.settings import settings as env_settings
 from db.models import Setting
 from db.session import get_session
+
+logger = logging.getLogger(__name__)
+
 
 def _cast_bool(value: str) -> bool:
     return value.strip().lower() in ("true", "1", "yes", "on")
@@ -71,24 +76,57 @@ class RuntimeConfig:
     # posições já abertas -- só a checagem de abrir posição nova.
 
 
-def load_runtime_config() -> RuntimeConfig:
+def load_runtime_config(account_id: uuid.UUID | None = None) -> RuntimeConfig:
+    """`account_id` (multi-conta-plano.md, Fase B/C/E -- ver 10.8): quando
+    informado, mescla dois níveis -- primeiro os overrides "master"
+    (account_id NULL na tabela settings: bot_status, seção 5.3, e o
+    valor-base de qualquer chave até uma conta divergir), depois por CIMA os
+    overrides da PRÓPRIA conta (account_id == account_id), que VENCEM em caso
+    de a mesma chave existir nos dois níveis -- é assim que uma conta
+    consegue ter, por exemplo, um max_allocation_pct_per_trade diferente da
+    outra. Omitido (default), comportamento idêntico a antes: TODAS as linhas
+    de settings entram, sem filtro nenhum -- é assim que main.py e chamadas
+    legadas continuam funcionando sem mudança nenhuma. Desde 25/09/2026
+    `Setting` tem chave composta de verdade (id substituto + índices únicos
+    parciais, ver db/models.py e migrate_add_settings_composite_key.py) --
+    antes disso só havia 1 linha global por chave, então account_id nunca
+    filtrava nada de fato; agora filtra e a ordem do merge abaixo importa.
+    """
     overrides: dict[str, str] = {}
     with get_session() as session:
-        for row in session.query(Setting).all():
+        query = session.query(Setting)
+        if account_id is not None:
+            query = query.filter((Setting.account_id == account_id) | (Setting.account_id.is_(None)))
+        # Ordena global (account_id NULL) primeiro, override da conta por
+        # último -- o loop abaixo sobrescreve overrides[key] em ordem, então
+        # o override específico da conta sempre vence sobre o master pra
+        # mesma chave, nunca o contrário.
+        query = query.order_by(Setting.account_id.isnot(None))
+        for row in query.all():
             overrides[row.key] = row.value
 
     def pick(key: str, default):
+        # Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5): todo desvio
+        # pro default aqui era silencioso -- um valor inválido salvo na tabela
+        # `settings` (corrompido manualmente, ou um bug futuro na validação do
+        # lado do dashboard) fazia o bot ignorá-lo todo ciclo sem nenhuma pista
+        # no log de por que "mudar em /settings não tem efeito".
         caster = _CASTERS.get(key, str)
         if key in overrides:
+            raw = overrides[key]
             try:
-                value = caster(overrides[key])
+                value = caster(raw)
             except (TypeError, ValueError):
+                logger.warning("config_store: %s=%r não converteu (esperado %s) -- usando default %r.", key, raw, caster, default)
                 return default
             if key in _RANGES and not (_RANGES[key][0] <= value <= _RANGES[key][1]):
+                logger.warning("config_store: %s=%r fora da faixa válida %s -- usando default %r.", key, value, _RANGES[key], default)
                 return default
             if key == "bot_status" and value not in ("running", "paused"):
+                logger.warning("config_store: bot_status=%r inválido (esperado running/paused) -- usando default %r.", value, default)
                 return default
             if key == "safety_stablecoin" and not (value.isalnum() and value.isupper()):
+                logger.warning("config_store: safety_stablecoin=%r inválido -- usando default %r.", value, default)
                 return default
             return value
         return default

@@ -1,4 +1,21 @@
-"""Paper trading (dry-run) ao vivo, em paralelo, das 4 configurações de
+"""⚠️ APOSENTADO COMO REFERÊNCIA DE VALIDAÇÃO (decisão do Ivan, 21/09/2026,
+arquitetura-tecnica.md seção 9.21 decisão #7 / item 19 da seção 9.20).
+
+Motivo: este script nunca foi atualizado desde 16/09/2026 e não reflete a
+reescrita de `execution_agent.py` de 18-19/09 (sem trailing stop, por
+exemplo -- reimplementa só stop/take estáticos aqui) nem desconta NENHUMA
+taxa de corretagem (nem a aproximação de 0,2% usada nos backtests) -- os
+números que ele produz não são comparáveis 1:1 com o comportamento real do
+bot, e não devem mais ser usados pra validar/invalidar uma estratégia.
+Continua no repositório só como referência histórica de como o teste
+out-of-sample ao vivo foi feito nesta sessão -- não é mais executado como
+parte do fluxo de validação. Se precisar de um teste out-of-sample ao vivo
+de novo no futuro, reescrever do zero reaproveitando o `ExecutionAgent`
+real (com trailing stop/OCO/taxa) em vez de reimplementar a lógica aqui.
+
+Docstring original, mantida por contexto histórico:
+
+Paper trading (dry-run) ao vivo, em paralelo, das 4 configurações de
 estratégia já testadas em backtest nesta sessão: comitê redesenhado
 (trend_following/breakout com gate de ADX, mean_reversion desativado),
 Kotegawa (reversão à média) e RAPF com e sem filtros de força/volume.

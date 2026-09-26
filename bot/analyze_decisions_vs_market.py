@@ -5,6 +5,20 @@ Uso (dentro de bot/): python analyze_decisions_vs_market.py
 
 Saídas: eficácia das aprovações/reprovações, oportunidades "perdidas" (potencial)
 e uma simulação sequencial do que o pipeline teria rendido sem restrição de saldo.
+
+RESSALVAS ESTATÍSTICAS (achado 24/09/2026, arquitetura-tecnica.md 9.20, Fase 5
+-- registradas aqui em vez de "corrigidas" porque são limitações inerentes ao
+método, não bugs de cálculo):
+1. Horizonte truncado (right-censoring): oportunidades recentes demais podem
+   não ter as 24h completas de dado pra frente -- ver docstring de Series.sim()
+   e o motivo "tempo_truncado" (distinto de "tempo") nos resultados.
+2. Autocorrelação: as seções 1-4 e 6 agregam retornos de janelas futuras que
+   podem se sobrepor no tempo (o mesmo par escaneado repetidas vezes em
+   ciclos próximos compartilha grande parte do mesmo caminho de preço à
+   frente) -- os pontos NÃO são amostras independentes, então médias/taxas de
+   acerto aqui têm variância maior do que o "n" sugere à primeira vista. A
+   seção 6 (simulação sequencial, 1 posição por vez) é a menos afetada por
+   isso, já que serializa no tempo em vez de agregar tudo de uma vez.
 """
 from __future__ import annotations
 
@@ -16,9 +30,21 @@ import time
 import httpx
 from sqlalchemy import text
 
+from config.settings import settings
 from db.session import get_session
 
-STOP, TAKE = 0.01, 0.015      # pisos usados de fato pelo RiskCommitteeAgent (settings.min_stop/take)
+# Achado 24/09/2026 (arquitetura-tecnica.md 9.21 item 29): isto ficou hardcoded
+# em 1%/1,5% desde antes da revisão de 19/09/2026 que subiu os PISOS de
+# stop/take em settings.py pra 2%/4% (ver comentário de min_stop_loss_pct lá --
+# essa própria revisão foi baseada numa rodada ANTERIOR deste script, com os
+# valores antigos). Desde então este script simulava com um stop/take que o
+# bot não usa mais há dias, subestimando a distância real do stop (e
+# superestimando a do take) de toda operação simulada aqui. Lido direto de
+# settings agora pra nunca mais dessincronizar quando o piso mudar de novo --
+# ainda é uma aproximação (o LLM pode escolher um valor calibrado por ATR
+# ACIMA do piso pra uma oportunidade específica; aqui não temos o valor
+# exato que cada oportunidade teria recebido, só o piso mínimo garantido).
+STOP, TAKE = settings.min_stop_loss_pct / 100, settings.min_take_profit_pct / 100
 FEE_ROUND_TRIP = 0.002        # 0,1% de taxa em cada lado
 H24 = 288                     # 24h em candles de 5m
 MIN_FWD = 48                  # exige >= 4h de dados à frente pra entrar nas médias
@@ -64,13 +90,27 @@ class Series:
         return lo if lo < len(self.t) else None
 
     def sim(self, i: int, stop=STOP, take=TAKE, horizon=H24) -> dict | None:
-        """Entra na abertura do candle i; sai em stop/take/tempo. Stop vence se os dois caem no mesmo candle."""
+        """Entra na abertura do candle i; sai em stop/take/tempo. Stop vence se os dois caem no mesmo candle.
+
+        Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5 -- "horizonte
+        truncado / right-censoring"): oportunidades perto do fim dos dados
+        buscados (as mais recentes) podem não ter o horizonte cheio (H24 = 24h)
+        disponível pra frente -- o loop abaixo já limitava a janela ao que
+        existia (`end = min(n-1, i+horizon)`), mas rotulava esse caso igual a
+        um "tempo" de verdade (24h completas sem bater stop/take), quando na
+        real o dado só ACABOU antes de dar tempo de bater. Agora esse caso
+        fica marcado como "tempo_truncado" (mesmo net calculado, só o motivo
+        muda) -- não é um bug de cálculo, é uma questão de honestidade
+        estatística: esses pontos são censurados à direita (right-censored) e
+        não deviam ser lidos como equivalentes a um "aguentou as 24h inteiras
+        sem bater stop/take"."""
         n = len(self.t)
         if i >= n - MIN_FWD:
             return None
         entry = self.o[i]
         end = min(n - 1, i + horizon)
-        exit_px, why, j_exit = self.c[end], "tempo", end
+        truncated = end < i + horizon
+        exit_px, why, j_exit = self.c[end], ("tempo_truncado" if truncated else "tempo"), end
         for j in range(i, end + 1):
             if self.l[j] <= entry * (1 - stop):
                 exit_px, why, j_exit = entry * (1 - stop), "stop", j

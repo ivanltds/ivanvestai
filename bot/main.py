@@ -83,13 +83,19 @@ async def process_pending_commands() -> None:
 
 
 def _upsert_setting(session, key: str, value: str) -> None:
+    """Só usado pra `bot_status` (master, account_id=NULL) -- kill switch
+    geral do dashboard (POST /api/commands -> fila Redis -> aqui). `key`
+    deixou de ser PK sozinha em 25/09/2026 (multi-conta-plano.md, Fase E, ver
+    10.8) -- session.get(Setting, key) buscaria por `id` agora, não por
+    `key`, e nunca acharia a linha certa. Busca explícita por (key,
+    account_id IS NULL) no lugar."""
     from db.models import Setting
 
-    row = session.get(Setting, key)
+    row = session.query(Setting).filter(Setting.key == key, Setting.account_id.is_(None)).first()
     if row:
         row.value = value
     else:
-        session.add(Setting(key=key, value=value))
+        session.add(Setting(key=key, value=value, account_id=None))
 
 
 async def sync_cycle_interval(scheduler: AsyncIOScheduler) -> None:
@@ -112,7 +118,11 @@ async def sync_cycle_interval(scheduler: AsyncIOScheduler) -> None:
 
 async def amain() -> None:
     config = load_runtime_config()
-    scheduler = AsyncIOScheduler(timezone="America/Sao_Paulo")
+    # Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5): settings.timezone
+    # já existia (default "America/Sao_Paulo") mas nunca era lido -- o scheduler
+    # tinha o fuso hardcoded, então mudar settings.timezone no .env não tinha
+    # efeito nenhum. Agora lê do settings de verdade.
+    scheduler = AsyncIOScheduler(timezone=settings.timezone)
 
     # `next_run_time=None` no APScheduler NÃO dispara já na largada -- na
     # verdade faz o oposto: adiciona o job PAUSADO (só roda depois de um

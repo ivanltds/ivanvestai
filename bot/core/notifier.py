@@ -45,8 +45,18 @@ def send_push_alert(title: str, body: str) -> None:
                     vapid_private_key=settings.vapid_private_key,
                     vapid_claims={"sub": settings.vapid_claims_email},
                 )
-            except WebPushException:
-                # subscription expirada/inválida — poderia remover do banco aqui
+            except WebPushException as exc:
+                # Achado 24/09/2026 (arquitetura-tecnica.md 9.26, item 7): antes
+                # nunca removia a subscription morta -- toda subscription
+                # expirada/inválida era retentada (e falhava) pra sempre, em todo
+                # alerta futuro. 404/410 são os códigos padrão de "subscription
+                # não existe mais" (RFC 8030) -- só esses são removidos; qualquer
+                # outro código (erro transitório do serviço de push, por exemplo)
+                # é deixado pra tentar de novo no próximo alerta.
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if status_code in (404, 410):
+                    logger.info("Removendo push subscription morta (status=%s): %s", status_code, sub.endpoint)
+                    session.delete(sub)
                 continue
 
 

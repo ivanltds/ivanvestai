@@ -58,12 +58,16 @@ SCRIPT_VERSION = "2026-09-16-v3-ignore-macro-window"
 
 
 def _set_bot_status(value: str) -> None:
+    """bot_status é sempre "master" (account_id=NULL). `key` deixou de ser PK
+    sozinha em 25/09/2026 (multi-conta-plano.md, Fase E, ver 10.8) --
+    session.get(Setting, "bot_status") buscaria por `id` agora e nunca
+    acharia a linha. Busca explícita por (key, account_id IS NULL)."""
     with get_session() as session:
-        row = session.get(Setting, "bot_status")
+        row = session.query(Setting).filter(Setting.key == "bot_status", Setting.account_id.is_(None)).first()
         if row:
             row.value = value
         else:
-            session.add(Setting(key="bot_status", value=value))
+            session.add(Setting(key="bot_status", value=value, account_id=None))
 
 
 def main() -> None:

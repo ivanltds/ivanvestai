@@ -9,10 +9,12 @@ decisão (custo afundado), só o quadro técnico atual e a relevância/liquidez
 do ativo importam.
 
 Não avalia: stablecoins, poeira (valor abaixo de DUST_THRESHOLD_USDT -- não
-compensa nem a taxa de venda) e ativos que já têm uma Position aberta
+compensa nem a taxa de venda), ativos que já têm uma Position aberta
 gerenciada pelo bot (essas já têm stop/take/trailing cuidando da saída em
 orchestrator.cycle_runner._manage_open_positions -- avaliar de novo aqui
-seria redundante e poderia conflitar).
+seria redundante e poderia conflitar) e ativos protegidos por allowlist
+(settings.position_review_protected_assets, BNB por padrão -- reserva de
+taxa da conta, nunca deve ser vendida por este agente).
 
 SEGURANÇA (ver arquitetura-tecnica.md 9.6/9.8): a venda passa pela MESMA
 regra de dry_run de qualquer outra saída do bot (ExecutionAgent._fill_price)
@@ -23,6 +25,7 @@ e mesmo assim só quando a confiança do veredito >= min_confidence_to_exit."""
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -31,7 +34,7 @@ from agents.base import BaseAgent
 from agents.execution_agent import ExecutionAgent
 from config.settings import settings
 from core import vlog
-from core.binance_client import binance_client
+from core.binance_client import BinanceClient, binance_client
 from core.indicators import confluence_score, market_regime, score_mean_reversion, score_trend_following
 from core.risk_rules import is_stablecoin
 from db.models import Position, PositionReview, WalletSnapshot
@@ -54,17 +57,50 @@ class PositionReviewVerdict(BaseModel):
 
 class PositionReviewAgent(BaseAgent):
     name = "position_review_agent"
-    model = settings.openai_model_robust
+    # Por padrão o modelo robusto da OpenAI; se
+    # settings.filter_agent_provider="deepseek" (opt-in manual, ver
+    # config/settings.py e core/llm_client.py), usa deepseek_model no lugar.
+    model = (
+        settings.deepseek_model
+        if settings.filter_agent_provider == "deepseek"
+        else settings.openai_model_robust
+    )
+
+    def __init__(
+        self,
+        *,
+        binance: BinanceClient | None = None,
+        dry_run: bool | None = None,
+        safety_stablecoin: str | None = None,
+        account_id: uuid.UUID | None = None,
+    ) -> None:
+        # Multi-conta (multi-conta-plano.md, Fase B/C): parâmetros opcionais,
+        # caem pro global de hoje se omitidos -- ver comentário em
+        # execution_agent.py. `account_id`, quando informado, também filtra a
+        # query de posições abertas em run() (ver ali) -- sem isso, com 2+
+        # contas ativas, uma posição aberta da CONTA A apareceria como
+        # "já gerenciada pelo bot" ao revisar a carteira da CONTA B.
+        super().__init__()
+        self._binance = binance if binance is not None else binance_client
+        self._dry_run = dry_run if dry_run is not None else settings.dry_run
+        self._safety_stablecoin = safety_stablecoin if safety_stablecoin is not None else settings.safety_stablecoin
+        self._account_id = account_id
 
     def _already_bot_managed(self, asset: str, open_positions: list[Position]) -> bool:
-        pair = f"{asset}{settings.safety_stablecoin}"
+        pair = f"{asset}{self._safety_stablecoin}"
         return any(p.pair == pair for p in open_positions)
+
+    def _protected_assets(self) -> set[str]:
+        """Allowlist configurável (settings.position_review_protected_assets, CSV) de
+        ativos que este agente nunca deve vender -- BNB por padrão (reserva de taxa da
+        conta, não posição especulativa). Ver arquitetura-tecnica.md 9.21 item 10."""
+        return {a.strip().upper() for a in settings.position_review_protected_assets.split(",") if a.strip()}
 
     def _technical_snapshot(self, pair: str) -> dict | None:
         try:
-            df_4h = binance_client.get_klines_df(pair, "4h", limit=120, closed_only=True)
-            df_1h = binance_client.get_klines_df(pair, "1h", limit=120, closed_only=True)
-            df_15m = binance_client.get_klines_df(pair, "15m", limit=120, closed_only=True)
+            df_4h = self._binance.get_klines_df(pair, "4h", limit=120, closed_only=True)
+            df_1h = self._binance.get_klines_df(pair, "1h", limit=120, closed_only=True)
+            df_15m = self._binance.get_klines_df(pair, "15m", limit=120, closed_only=True)
             regime = market_regime(df_4h)
             votes = score_trend_following(df_1h, df_15m) if regime == "trend" else score_mean_reversion(df_15m)
             return {
@@ -79,7 +115,7 @@ class PositionReviewAgent(BaseAgent):
             return None
 
     def evaluate(self, snapshot: WalletSnapshot) -> PositionReviewVerdict:
-        pair = f"{snapshot.asset}{settings.safety_stablecoin}"
+        pair = f"{snapshot.asset}{self._safety_stablecoin}"
         technicals = self._technical_snapshot(pair)
 
         cost_context = (
@@ -123,6 +159,7 @@ class PositionReviewAgent(BaseAgent):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             response_model=PositionReviewVerdict,
+            account_id=self._account_id,
         )
 
     def _recently_reviewed_assets(self) -> set[str]:
@@ -141,20 +178,27 @@ class PositionReviewAgent(BaseAgent):
 
     def run(self, wallet_snapshots: list[WalletSnapshot]) -> list[PositionReview]:
         with get_session() as session:
-            open_positions = session.query(Position).filter_by(status="open").all()
+            position_query = session.query(Position).filter_by(status="open")
+            if self._account_id is not None:
+                position_query = position_query.filter(Position.account_id == self._account_id)
+            open_positions = position_query.all()
         recently_reviewed = self._recently_reviewed_assets()
 
-        execution_agent = ExecutionAgent()
+        execution_agent = ExecutionAgent(
+            binance=self._binance, dry_run=self._dry_run, safety_stablecoin=self._safety_stablecoin,
+        )
         reviews: list[PositionReview] = []
 
         for snapshot in wallet_snapshots:
-            if snapshot.asset == settings.safety_stablecoin or is_stablecoin(snapshot.asset):
+            if snapshot.asset == self._safety_stablecoin or is_stablecoin(snapshot.asset):
                 continue
             if snapshot.value_usdt < DUST_THRESHOLD_USDT:
                 continue
             if self._already_bot_managed(snapshot.asset, open_positions):
                 continue
             if snapshot.asset in recently_reviewed:
+                continue
+            if snapshot.asset.upper() in self._protected_assets():
                 continue
 
             try:
@@ -176,12 +220,19 @@ class PositionReviewAgent(BaseAgent):
                     )
                     if trade is not None:
                         acted = True
-                        tag = "SIMULADA (dry-run)" if settings.dry_run else "REAL"
+                        tag = "SIMULADA (dry-run)" if self._dry_run else "REAL"
                         vlog.exit_(f"{snapshot.asset}: venda recomendada e executada [{tag}]", positive=False)
                     else:
+                        # Achado 24/09/2026 (arquitetura-tecnica.md 9.20 item 23): esta
+                        # mensagem antes afirmava sempre "abaixo do mínimo", mas
+                        # sell_wallet_asset devolve None também quando o saldo está
+                        # preso em outra ordem aberta (motivo bem diferente) -- o log
+                        # de execution_agent.py agora registra o motivo real; aqui
+                        # ficamos genéricos de propósito, pra não repetir a suposição
+                        # errada.
                         vlog.warn(
-                            f"{snapshot.asset}: venda recomendada, mas quantidade ficou abaixo do "
-                            "mínimo da Binance depois do arredondamento -- mantida por segurança."
+                            f"{snapshot.asset}: venda recomendada, mas não foi possível concluir "
+                            "(saldo abaixo do mínimo ou preso em outra ordem -- ver log) -- mantida por segurança."
                         )
                 except Exception:
                     vlog.fail(f"Falha ao tentar vender {snapshot.asset} -- posição mantida por segurança.")
@@ -199,8 +250,9 @@ class PositionReviewAgent(BaseAgent):
                     reasoning=verdict.reasoning,
                     value_usdt=snapshot.value_usdt,
                     acted=acted,
-                    is_paper=settings.dry_run,
+                    is_paper=self._dry_run,
                     price_at_review=price_at_review,
+                    account_id=self._account_id,
                 )
                 session.add(review)
                 reviews.append(review)

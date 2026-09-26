@@ -146,22 +146,48 @@ def section_real_pipeline(session) -> dict:
 
     print(f"\nTotal de trades simulados: {len(trades)}  |  Posições simuladas: {len(positions)}")
 
-    # Calcula pnl% por posição fechada, casando buy (open_position) com sell (sell_position)
-    closed_pnls = []
+    # Calcula pnl% por posição fechada, casando buy (open_position) com sell (sell_position).
+    #
+    # Achado 24/09/2026 (arquitetura-tecnica.md 9.21 item 20): o pareamento original
+    # pegava, pra CADA posição fechada, a primeira venda daquele par com timestamp
+    # >= opened_at -- sem marcar a venda como "usada". Com mais de uma posição
+    # fechada no mesmo par, a venda mais antiga do par era reaproveitada pra TODAS
+    # elas (ex: 2 posições LTCUSDT fechadas em momentos diferentes casavam com a
+    # MESMA venda mais antiga -- a 2ª nunca pegava a venda que de fato fechou ela),
+    # distorcendo o PnL calculado sem nenhum aviso. Corrigido pareando por ORDEM
+    # dentro de cada par: a n-ésima posição fechada (por opened_at) casa com a
+    # n-ésima venda (por timestamp) daquele mesmo par -- cada venda só é usada uma vez.
+    sells_by_pair: dict[str, list] = defaultdict(list)
+    for t in trades:
+        if t["side"] == "sell":
+            sells_by_pair[t["pair"]].append(t)
+    for pair_sells in sells_by_pair.values():
+        pair_sells.sort(key=lambda t: t["timestamp"])
+
+    closed_positions_by_pair: dict[str, list] = defaultdict(list)
     open_now = 0
     for p in positions:
         if p["status"] == "closed":
-            # acha o trade de venda correspondente pelo par mais próximo em tempo
-            sells = [t for t in trades if t["pair"] == p["pair"] and t["side"] == "sell"
-                     and t["timestamp"] >= (p["opened_at"] or t["timestamp"])]
-            if sells and p["avg_entry_price"]:
-                exit_price = float(sells[0]["price"])
-                pnl_pct = (exit_price - float(p["avg_entry_price"])) / float(p["avg_entry_price"]) * 100
-                closed_pnls.append(pnl_pct)
+            closed_positions_by_pair[p["pair"]].append(p)
         else:
             open_now += 1
+    for pair_positions in closed_positions_by_pair.values():
+        pair_positions.sort(key=lambda p: p["opened_at"] or p["opened_at"])
 
-    print(f"Posições fechadas com PnL calculável: {len(closed_pnls)}  |  Ainda abertas: {open_now}")
+    closed_pnls = []
+    unmatched = 0
+    for pair, pair_positions in closed_positions_by_pair.items():
+        pair_sells = sells_by_pair.get(pair, [])
+        for idx, p in enumerate(pair_positions):
+            if idx >= len(pair_sells) or not p["avg_entry_price"]:
+                unmatched += 1
+                continue
+            exit_price = float(pair_sells[idx]["price"])
+            pnl_pct = (exit_price - float(p["avg_entry_price"])) / float(p["avg_entry_price"]) * 100
+            closed_pnls.append(pnl_pct)
+
+    print(f"Posições fechadas com PnL calculável: {len(closed_pnls)}  |  Ainda abertas: {open_now}"
+          f"{f'  |  sem venda correspondente: {unmatched}' if unmatched else ''}")
     if closed_pnls:
         wins = sum(1 for p in closed_pnls if p > 0)
         print(f"Win rate: {wins/len(closed_pnls)*100:.1f}%  |  PnL médio: {_fmt_pct(statistics.mean(closed_pnls))}"

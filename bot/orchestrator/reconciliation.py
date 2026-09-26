@@ -4,15 +4,24 @@ ViabilityAgent revota uma única vez (o PortfolioComparisonAgent é
 determinístico — regras de capital não "revotam", só informam)."""
 from __future__ import annotations
 
+import uuid
+
 from agents.base import AgentVerdict
 from agents.portfolio_comparison_agent import PortfolioCheck
 from agents.viability_agent import ViabilityAgent
 from agents.market_scanner_agent import ScannerOpportunity
+from config.settings import settings
 from core.llm_client import call_structured
 
 
 def has_divergence(viability: AgentVerdict, portfolio: PortfolioCheck) -> bool:
-    viability_positive = viability.decision == "approve" and viability.confidence >= 0.6
+    # Achado 24/09/2026 (arquitetura-tecnica.md 9.20 item 26): o limiar de
+    # "posição positiva" aqui estava hardcoded em 0.6, desalinhado do piso
+    # real de aprovação (settings.min_confidence_to_trade, default 0.80) --
+    # uma oportunidade com confiança 0.65 era tratada como "positiva" nesta
+    # checagem de divergência, mesmo que jamais fosse aprovada pelo comitê
+    # de risco de verdade. Agora usa o mesmo piso real.
+    viability_positive = viability.decision == "approve" and viability.confidence >= settings.min_confidence_to_trade
     return viability_positive != portfolio.approved
 
 
@@ -21,6 +30,7 @@ def reconcile(
     opportunity: ScannerOpportunity,
     viability_verdict: AgentVerdict,
     portfolio_check: PortfolioCheck,
+    account_id: uuid.UUID | None = None,
 ) -> AgentVerdict:
     """Uma única rodada extra: o ViabilityAgent recebe o parecer de risco
     de portfólio e revota, levando em conta as restrições de capital."""
@@ -46,4 +56,5 @@ def reconcile(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         response_model=AgentVerdict,
+        account_id=account_id,
     )

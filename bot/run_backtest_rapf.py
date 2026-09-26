@@ -253,8 +253,21 @@ def run(symbol: str, big_interval: str, small_interval: str, num_small_candles: 
                     result.triggers_filtered_out += 1
 
         elif state == "armed":
+            # Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5): quando o
+            # range de UMA candle cobre tanto o gatilho de ENTRADA quanto o
+            # nível de invalidação (stop_ref), não dá pra saber pela OHLC qual
+            # aconteceu primeiro de verdade. A gestão de posição aberta acima
+            # (stop vs. take) já resolve essa ambiguidade do jeito conservador
+            # (assume o pior caso primeiro); aqui a ordem estava invertida --
+            # entrada era checada ANTES da invalidação, favorecendo o RAPF
+            # (deixava entrar em candles ambíguas que a convenção conservadora
+            # teria descartado). RAPF já foi rejeitado (seção 9.5) e não afeta
+            # nenhuma decisão real -- corrigido por consistência estatística,
+            # não porque isso mude a decisão de produto já tomada.
             if context_dir == "up":
-                if high >= trigger["high"]:
+                if low <= trigger["stop_ref"]:
+                    state, context_dir, trigger, min_low_since_lost = "idle", None, None, None
+                elif high >= trigger["high"]:
                     entry_price = trigger["high"]
                     stop_price = trigger["stop_ref"]
                     risk = entry_price - stop_price
@@ -267,10 +280,10 @@ def run(symbol: str, big_interval: str, small_interval: str, num_small_candles: 
                         position = {"qty": qty, "entry_price": entry_price, "entry_time": now,
                                     "stop_price": stop_price, "take_price": take_price, "direction": "long"}
                     state, context_dir, trigger, min_low_since_lost = "idle", None, None, None
-                elif low <= trigger["stop_ref"]:
-                    state, context_dir, trigger, min_low_since_lost = "idle", None, None, None
             else:
-                if low <= trigger["low"]:
+                if high >= trigger["stop_ref"]:
+                    state, context_dir, trigger, min_low_since_lost = "idle", None, None, None
+                elif low <= trigger["low"]:
                     entry_price = trigger["low"]
                     stop_price = trigger["stop_ref"]
                     risk = stop_price - entry_price
@@ -278,8 +291,6 @@ def run(symbol: str, big_interval: str, small_interval: str, num_small_candles: 
                         take_price = entry_price - risk * reward_risk
                         position = {"qty": 0.0, "entry_price": entry_price, "entry_time": now,
                                     "stop_price": stop_price, "take_price": take_price, "direction": "short"}
-                    state, context_dir, trigger, min_low_since_lost = "idle", None, None, None
-                elif high >= trigger["stop_ref"]:
                     state, context_dir, trigger, min_low_since_lost = "idle", None, None, None
 
         result.equity_curve.append(equity)

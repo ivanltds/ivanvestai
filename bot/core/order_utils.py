@@ -77,3 +77,60 @@ def trailing_distance_pct(reference_price: float | None, stop_price: float | Non
     if reference_price and stop_price and 0 < stop_price < reference_price:
         return (reference_price - stop_price) / reference_price * 100
     return default_pct
+
+
+# --- OCO (stop + take na exchange) -----------------------------------------------------
+
+def round_to_tick(price: float | Decimal, tick: float | Decimal, mode: str) -> Decimal:
+    """Arredonda `price` pro múltiplo do `tickSize` (PRICE_FILTER da Binance).
+    mode: 'down' | 'up' | 'nearest'."""
+    from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
+
+    p, t = Decimal(str(price)), Decimal(str(tick))
+    rounding = {"down": ROUND_FLOOR, "up": ROUND_CEILING, "nearest": ROUND_HALF_UP}[mode]
+    return (p / t).to_integral_value(rounding=rounding) * t
+
+
+def oco_price_levels(
+    last_price: float, take_price: float, stop_price: float, tick: float, limit_gap: float = 0.002
+) -> tuple[Decimal, Decimal, Decimal]:
+    """(take, stop_trigger, stop_limit) arredondados pro tick, pra um OCO de VENDA.
+
+    O stop é STOP_LOSS_LIMIT: dispara em `stop_trigger` e vende a limite em `stop_limit`
+    (`limit_gap` abaixo do gatilho, pra ordem realmente executar num movimento rápido).
+    Levanta ValueError se o preço atual já passou de um dos níveis (a Binance exige
+    stop < último preço < take) -- nesse caso a saída fica com o stop por software."""
+    take = round_to_tick(take_price, tick, "up")
+    stop = round_to_tick(stop_price, tick, "down")
+    limit = round_to_tick(stop * (1 - Decimal(str(limit_gap))), tick, "down")
+    last = Decimal(str(last_price))
+    if not (limit > 0 and limit < stop < last < take):
+        raise ValueError(
+            f"níveis inválidos pra OCO: limite {limit} < stop {stop} < último {last} < take {take} não vale."
+        )
+    return take, stop, limit
+
+
+def oco_is_filled(oco_status: dict) -> bool:
+    """True se a lista OCO já foi resolvida (perna executada ou lista cancelada
+    por completo) -- `listOrderStatus` vem de `get_oco_order`. Enquanto for
+    "EXECUTING", a lista segue ativa na exchange e não deve ser mexida."""
+    return (oco_status or {}).get("listOrderStatus") == "ALL_DONE"
+
+
+def summarize_oco_orders(orders: list[dict]) -> dict | None:
+    """Resume o resultado de uma lista OCO já encerrada a partir das ORDENS das duas pernas
+    (respostas de get_order). Devolve None se nenhuma perna executou (lista cancelada);
+    senão {'reason': 'take_profit'|'stop_loss', 'quantity', 'price', 'order_id', 'time_ms'}."""
+    filled = [o for o in orders if float(o.get("executedQty") or 0) > 0]
+    if not filled:
+        return None
+    leg = max(filled, key=lambda o: float(o.get("executedQty") or 0))
+    qty = float(leg["executedQty"])
+    quote = float(leg.get("cummulativeQuoteQty") or 0)
+    price = quote / qty if quote > 0 else float(leg.get("price") or 0)
+    reason = "take_profit" if leg.get("type") in ("LIMIT_MAKER", "TAKE_PROFIT", "TAKE_PROFIT_LIMIT", "LIMIT") else "stop_loss"
+    return {
+        "reason": reason, "quantity": qty, "price": price,
+        "order_id": leg.get("orderId"), "time_ms": leg.get("updateTime") or leg.get("time"),
+    }

@@ -10,7 +10,7 @@ import datetime as dt
 import pandas as pd
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from config.settings import settings
 from core.order_utils import format_quantity
@@ -49,6 +49,46 @@ _BINANCE_ERROR_HINTS: dict[int, str] = {
 def _hint_for(exc: BinanceAPIException) -> str | None:
     return _BINANCE_ERROR_HINTS.get(exc.code)
 
+
+# Códigos de erro da Binance que são de CONFIGURAÇÃO/PERMANENTES -- tentar de
+# novo não muda o resultado, porque a causa não é uma falha transitória de
+# rede/servidor, é uma condição que só se resolve fora do bot (chave/IP/
+# permissão, saldo insuficiente, parâmetro inválido etc). Até aqui TODA
+# chamada de leitura tentava de novo 3x com backoff exponencial pra QUALQUER
+# exceção, inclusive essas -- com um -2015 persistente (achado 24/09/2026,
+# ver arquitetura-tecnica.md 9.21 item 14, depois de 12h+ contínuas do mesmo
+# erro nos logs), isso multiplicava por ~3x tentativas x até 8s de espera x
+# ~100 pares escaneados por ciclo x 96 ciclos/dia -- puro desperdício de
+# tempo de ciclo e ruído de log, sem nenhuma chance de sucesso na 2ª/3ª
+# tentativa. Qualquer código NÃO listado aqui continua tentando de novo
+# normalmente (rate limit, timeout, erro interno da Binance etc -- esses sim
+# costumam se resolver numa nova tentativa), e exceções que não são
+# BinanceAPIException (erro de rede, timeout de conexão) também continuam
+# sendo retentadas.
+_NON_RETRYABLE_BINANCE_CODES = {
+    -2015,  # Invalid API-key, IP, or permissions for action
+    -2014,  # API-key format invalid
+    -2008,  # Invalid Api-Key ID
+    -1022,  # Signature for this request is not valid
+    -1021,  # Timestamp for this request is outside of the recvWindow
+    -2010,  # NEW_ORDER_REJECTED (ex: saldo insuficiente)
+    -1013,  # Filter failure (LOT_SIZE, MIN_NOTIONAL etc.)
+    -1121,  # Invalid symbol
+    -1102,  # Parâmetro obrigatório ausente/malformado
+    -1100,  # Caracteres ilegais no parâmetro
+}
+
+
+def _is_retryable_binance_error(exc: BaseException) -> bool:
+    """Predicate do @retry: só NÃO tenta de novo se for um erro Binance
+    permanente conhecido (ver _NON_RETRYABLE_BINANCE_CODES acima). Qualquer
+    outra exceção (rede, timeout, erro genérico, código não mapeado) continua
+    sendo retentada normalmente -- ficar de fora da lista é o padrão seguro."""
+    if isinstance(exc, BinanceAPIException) and exc.code in _NON_RETRYABLE_BINANCE_CODES:
+        return False
+    return True
+
+
 _KLINE_COLUMNS = [
     "open_time", "open", "high", "low", "close", "volume",
     "close_time", "quote_asset_volume", "num_trades",
@@ -59,10 +99,27 @@ _INTERVAL_MINUTES = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440, "1w": 10080}
 
 
 class BinanceClient:
-    def __init__(self) -> None:
-        self._client = Client(settings.binance_api_key, settings.binance_api_secret)
+    def __init__(self, api_key: str | None = None, api_secret: str | None = None) -> None:
+        # Multi-conta (multi-conta-plano.md, Fase B): api_key/api_secret agora são
+        # opcionais -- passe as credenciais DE UMA CONTA especifica pra operar essa
+        # conta (ver core/account_context.py), ou omita pra manter o comportamento de
+        # sempre (lê settings.binance_api_key/secret do .env, igual o singleton
+        # `binance_client` no fim deste arquivo, usado por todo o resto do projeto
+        # ainda hoje). Nenhum chamador existente precisa mudar.
+        #
+        # Timeout explícito (21/09/2026, ver arquitetura-tecnica.md 9.20/9.21, item
+        # crítico #4): sem isso, uma chamada HTTP pra Binance podia travar a thread
+        # indefinidamente -- como `_manage_open_positions` roda sob `_manage_lock`,
+        # isso travava a checagem de stop/take de TODAS as posições reais abertas até
+        # reinício manual, sem alerta nenhum. 20s é generoso o bastante pra não gerar
+        # falso positivo em rede lenta, mas bem menor que "infinito".
+        self._client = Client(
+            api_key if api_key is not None else settings.binance_api_key,
+            api_secret if api_secret is not None else settings.binance_api_secret,
+            requests_params={"timeout": 20},
+        )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_account_balances(self) -> list[dict]:
         """Saldos != 0 da subconta (spot)."""
         try:
@@ -74,15 +131,29 @@ class BinanceClient:
             raise
         return [b for b in account["balances"] if float(b["free"]) + float(b["locked"]) > 0]
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    # Achado 24/09/2026 (arquitetura-tecnica.md 9.26, item 4): sufixos de
+    # tokens alavancados da Binance (ex: BTCUPUSDT, ETHBULLUSDT) -- produtos
+    # com rebalanceamento diário e decaimento por desenho, comportamento de
+    # preço estruturalmente diferente de uma posição spot comum. Nada além
+    # disso filtrava por tipo de produto antes de entrar no Top N escaneado.
+    _LEVERAGED_TOKEN_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR")
+
+    def _is_leveraged_token(self, symbol: str, quote: str) -> bool:
+        base = symbol[: -len(quote)] if symbol.endswith(quote) else symbol
+        return base.endswith(self._LEVERAGED_TOKEN_SUFFIXES)
+
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_top_pairs_by_volume(self, quote: str = "USDT", top_n: int = 100) -> list[str]:
         """Top N pares por volume de 24h cotados na stablecoin de segurança."""
         tickers = self._client.get_ticker()
-        pairs = [t for t in tickers if t["symbol"].endswith(quote)]
+        pairs = [
+            t for t in tickers
+            if t["symbol"].endswith(quote) and not self._is_leveraged_token(t["symbol"], quote)
+        ]
         pairs.sort(key=lambda t: float(t["quoteVolume"]), reverse=True)
         return [p["symbol"] for p in pairs[:top_n]]
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_klines_df(self, symbol: str, interval: str, limit: int = 200, closed_only: bool = False) -> pd.DataFrame:
         """`closed_only=True` descarta o candle ainda em formação (o último, se
         `close_time` for futuro) -- indicadores/volume calculados num candle
@@ -98,7 +169,7 @@ class BinanceClient:
             df = df.iloc[:-1]
         return df.tail(limit).reset_index(drop=True) if closed_only else df
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_klines_df_window(
         self, symbol: str, interval: str, num_candles: int, end_time: dt.datetime
     ) -> pd.DataFrame:
@@ -122,7 +193,7 @@ class BinanceClient:
         df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
         return df
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_last_price(self, symbol: str) -> float:
         """Preço atual (ticker) -- usado pelo paper trading (run_paper_trading.py)
         pra gerir stop/take de posições simuladas em tempo real, sem precisar
@@ -130,7 +201,45 @@ class BinanceClient:
         ticker = self._client.get_symbol_ticker(symbol=symbol)
         return float(ticker["price"])
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    # Ativos-ponte tentados, em ordem, quando o par direto contra a quote não
+    # existe na Binance (ex: um ativo só listado contra BTC, nunca contra
+    # USDT diretamente). BTC/BNB/ETH cobrem a esmagadora maioria dos casos.
+    _PRICE_BRIDGE_ASSETS = ("BTC", "BNB", "ETH")
+
+    def get_last_price_via_bridge(self, asset: str, quote: str) -> float:
+        """Preço de `asset` cotado em `quote`, com fallback pra ativo-ponte.
+
+        Achado 24/09/2026 (arquitetura-tecnica.md 9.21 item 11): PortfolioAgent
+        assumia par direto asset+quote pra TODO ativo da carteira; pra um ativo
+        sem par direto contra USDT (só listado contra BTC/BNB, por exemplo),
+        get_last_price(f"{asset}{quote}") falhava (símbolo inválido) e o
+        chamador caía num fallback de valor 0.0 -- o ativo "sumia" do
+        patrimônio total calculado, distorcendo o teto de alocação por
+        operação e a avaliação de dust/relevância em outros agentes.
+        Agora tenta o par direto primeiro e, se não existir, converte via
+        BTC/BNB/ETH (nessa ordem). Levanta a última exceção se nada funcionar
+        -- o chamador decide como tratar (nunca decidir por engano que o
+        ativo vale zero)."""
+        if asset == quote:
+            return 1.0
+        last_error: Exception | None = None
+        try:
+            return self.get_last_price(f"{asset}{quote}")
+        except Exception as exc:  # noqa: BLE001 -- símbolo pode simplesmente não existir
+            last_error = exc
+        for bridge in self._PRICE_BRIDGE_ASSETS:
+            if bridge in (asset, quote):
+                continue
+            try:
+                asset_in_bridge = self.get_last_price(f"{asset}{bridge}")
+                bridge_in_quote = self.get_last_price(f"{bridge}{quote}")
+                return asset_in_bridge * bridge_in_quote
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                continue
+        raise last_error or RuntimeError(f"Não foi possível precificar {asset}/{quote}")
+
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_asset_balance(self, asset: str) -> tuple[float, float]:
         """(free, locked) de um ativo da subconta -- usado antes de vender pra
         nunca pedir mais do que o saldo real (taxa cobrada no ativo, saldo em
@@ -140,18 +249,73 @@ class BinanceClient:
             return 0.0, 0.0
         return float(bal["free"]), float(bal["locked"])
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_my_trades(self, symbol: str) -> list[dict]:
         """Histórico de execuções da subconta nesse par -- usado pelo
         PortfolioAgent pra calcular o preço médio de compra real, em vez de
         aproximar pelo preço atual (ver arquitetura-tecnica.md 9.3/9.6)."""
         return self._client.get_my_trades(symbol=symbol)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
     def get_symbol_filters(self, symbol: str) -> dict:
         """minNotional, stepSize etc — necessário pra validar tamanho mínimo de ordem."""
         info = self._client.get_symbol_info(symbol)
         return {f["filterType"]: f for f in info["filters"]}
+
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+    def get_price_tick_size(self, symbol: str) -> float:
+        """tickSize (PRICE_FILTER) -- granularidade mínima de preço pra ordens
+        LIMIT/OCO. Necessário pra arredondar os níveis do OCO (ver
+        core/order_utils.oco_price_levels)."""
+        filters = self.get_symbol_filters(symbol)
+        price_filter = filters.get("PRICE_FILTER", {})
+        return float(price_filter.get("tickSize", 0) or 0)
+
+    def place_oco_sell(
+        self, symbol: str, quantity: float, take_price: float, stop_price: float, stop_limit_price: float
+    ) -> dict:
+        """OCO (One-Cancels-Other) de venda: perna de lucro (LIMIT em take_price) +
+        perna de stop (STOP_LOSS_LIMIT, dispara em stop_price, vende a
+        stop_limit_price) -- uma cancela a outra automaticamente quando executa.
+        Proteção fica na própria Binance, sobrevive ao bot/PC desligado."""
+        try:
+            return self._client.create_oco_order(
+                symbol=symbol, side="SELL", quantity=format_quantity(quantity),
+                price=format_quantity(take_price),
+                stopPrice=format_quantity(stop_price),
+                stopLimitPrice=format_quantity(stop_limit_price),
+                stopLimitTimeInForce="GTC",
+            )
+        except BinanceAPIException as exc:
+            hint = _hint_for(exc)
+            if hint:
+                print(f"\n[binance_client] {hint}\n")
+            raise
+
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+    def get_oco_order(self, order_list_id: int) -> dict:
+        """Status da lista OCO (`listOrderStatus`: EXECUTING | ALL_DONE | REJECT)."""
+        return self._client.get_oco_order(orderListId=order_list_id)
+
+    @retry(retry=retry_if_exception(_is_retryable_binance_error), stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
+    def get_oco_sub_orders(self, symbol: str, order_list_id: int) -> list[dict]:
+        """Detalhes completos (executedQty, price, cummulativeQuoteQty etc) de cada
+        ordem-perna da lista OCO -- `get_oco_order` sozinho só devolve os orderIds,
+        não o resultado do preenchimento."""
+        oco = self._client.get_oco_order(orderListId=order_list_id)
+        return [self._client.get_order(symbol=symbol, orderId=leg["orderId"]) for leg in oco.get("orders", [])]
+
+    def cancel_oco_order(self, symbol: str, order_list_id: int) -> dict:
+        """Cancela uma lista OCO ainda aberta -- necessário antes de qualquer
+        venda manual/por software da mesma posição (o saldo fica travado nas
+        ordens da lista até ela ser cancelada)."""
+        try:
+            return self._client.cancel_oco_order(symbol=symbol, orderListId=order_list_id)
+        except BinanceAPIException as exc:
+            hint = _hint_for(exc)
+            if hint:
+                print(f"\n[binance_client] {hint}\n")
+            raise
 
     def place_market_order(self, symbol: str, side: str, quantity: float) -> dict:
         # A dica amigável de erro (_hint_for) só estava plugada em
@@ -170,11 +334,18 @@ class BinanceClient:
                 print(f"\n[binance_client] {hint}\n")
             raise
 
-    def place_limit_order(self, symbol: str, side: str, quantity: float, price: float, ttl_seconds: int = 10) -> dict:
-        """Ordem limit com fallback pra mercado se não preencher dentro do ttl.
+    def place_limit_order(self, symbol: str, side: str, quantity: float, price: float) -> dict:
+        """Ordem limit IOC (immediate-or-cancel) -- preenche na hora ou cancela
+        sozinha, sem nenhum "ttl" de fato implementado aqui (achado 24/09/2026,
+        arquitetura-tecnica.md 9.20, Fase 5: o parâmetro `ttl_seconds` antigo não
+        fazia nada -- a docstring prometia um fallback pra mercado que este método
+        nunca implementou, e nenhum chamador do projeto passava esse argumento).
 
-        Implementação simplificada pro MVP: cria a ordem IOC (immediate-or-cancel);
-        se não preencher, o ExecutionAgent decide se tenta de novo a mercado.
+        NÃO É USADA em produção hoje: desde a reescrita de execution_agent.py em
+        18-19/09/2026 (ver arquitetura-tecnica.md 9.17), toda ordem real do bot é
+        a mercado (place_market_order) -- limit IOC podia expirar sem executar e
+        mesmo assim deixar rastro de posição "fantasma". Mantida no cliente só
+        como utilitário de baixo nível, caso algum dia volte a ser necessária.
         """
         try:
             return self._client.create_order(

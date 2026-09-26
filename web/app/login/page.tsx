@@ -39,7 +39,7 @@ export default function LoginPage() {
     <div className="card" style={{ maxWidth: 380, margin: "64px auto" }}>
       <h1 style={{ fontSize: 20 }}>IvanVestAI</h1>
       <p style={{ color: "var(--muted)", fontSize: 13 }}>
-        Login com senha + confirmação por link mágico, já que o dashboard fica acessível pela internet.
+        Entre com sua senha OU peça um link mágico por e-mail -- qualquer um dos dois já cria sua sessão (não são dois fatores obrigatórios em sequência).
       </p>
       <form onSubmit={handlePasswordLogin} style={{ display: "grid", gap: 8, marginTop: 16 }}>
         <input type="email" placeholder="e-mail" value={email} onChange={(e) => setEmail(e.target.value)} required />

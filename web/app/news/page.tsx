@@ -2,6 +2,20 @@ import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth";
 import { query } from "@/lib/db";
 
+// Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5): item.url vem direto
+// de feeds RSS externos (bot/agents/news_agent.py, entry.link) sem nenhuma
+// validação de esquema antes de virar href aqui -- um feed malformado ou
+// malicioso podia, em tese, gravar um link javascript:/data: clicável. Só
+// renderiza como link quando o esquema é http(s); senão, mostra sem link.
+function isSafeHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 interface NewsRow {
   id: string;
   source: string;
@@ -35,9 +49,13 @@ export default async function NewsPage() {
             </span>
           </div>
           <p>{item.summary_pt}</p>
-          <a href={item.url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
-            fonte original
-          </a>
+          {isSafeHttpUrl(item.url) ? (
+            <a href={item.url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+              fonte original
+            </a>
+          ) : (
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>fonte original (link inválido)</span>
+          )}
         </div>
       ))}
     </div>

@@ -3,6 +3,14 @@ import { getSession } from "@/lib/auth";
 import { readRecentEvents } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
+// Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5): sem maxDuration
+// explícito, o plano padrão (Hobby) da Vercel encerra a função serverless
+// bem antes do MAX_CONNECTION_MS pretendido abaixo (~5 min) -- possivelmente
+// antes até do primeiro poll (POLL_INTERVAL_MS=15s). 60s é o teto do plano
+// Hobby; o EventSource do navegador reconecta sozinho quando a conexão cai,
+// então isso só limita quanto tempo cada conexão individual dura, não o
+// streaming em si.
+export const maxDuration = 60;
 
 const CHANNELS = ["positions", "decisions", "news", "alerts"];
 // Cada poll = 4 leituras no Upstash (uma por canal). A 4s por aba isso dava

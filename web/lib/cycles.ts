@@ -215,7 +215,26 @@ function makeHeadline(args: {
   return "Sem entradas ou saídas neste ciclo.";
 }
 
-export async function loadRecentCycles(limit = 5): Promise<{ cycles: CycleView[]; tableMissing: boolean }> {
+// multi-conta-plano.md, Fase E (seletor de conta no /dashboard e /operations,
+// ver 10.9) -- bot_logs NAO tem account_id (uma linha pode falar de uma
+// conta so, das duas, ou de nenhuma -- noticias/scanner sao compartilhados).
+// cycle_runner.py ja prefixa toda linha ESPECIFICA de uma conta com
+// "[ROTULO]" (ver vlog.* nas secoes "Gestao"/"Passo 1b"/"Passo 2-6"), entao
+// filtrar aqui e: linha sem nenhum rotulo conhecido = contexto compartilhado,
+// sempre mostra; linha com "[Rotulo]" = mostra so se bater com a conta
+// selecionada. Evita uma migracao de schema so pra isso.
+function lineIsAccountTagged(message: string, allAccountLabels: string[]): string | null {
+  for (const label of allAccountLabels) {
+    if (message.includes(`[${label}]`)) return label;
+  }
+  return null;
+}
+
+export async function loadRecentCycles(
+  limit = 5,
+  allAccountLabels: string[] = [],
+  accountFilter: { id: string; label: string } | null = null
+): Promise<{ cycles: CycleView[]; tableMissing: boolean }> {
   let cycleRows: {
     cycle_id: string;
     started_at: Date;
@@ -262,31 +281,45 @@ export async function loadRecentCycles(limit = 5): Promise<{ cycles: CycleView[]
       id: string; cycle_id: string; pair: string; strategy: string; market_regime: string;
       status: string; final_confidence: number | null;
     }>(
-      `select id, cycle_id, pair, strategy, market_regime, status, final_confidence
-       from opportunities where cycle_id = any($1) order by timestamp, id`,
-      [ids]
+      accountFilter
+        ? `select id, cycle_id, pair, strategy, market_regime, status, final_confidence
+           from opportunities where cycle_id = any($1) and account_id = $2 order by timestamp, id`
+        : `select id, cycle_id, pair, strategy, market_regime, status, final_confidence
+           from opportunities where cycle_id = any($1) order by timestamp, id`,
+      accountFilter ? [ids, accountFilter.id] : [ids]
     ),
     query<{
       id: string; timestamp: Date; pair: string; side: string; quantity: number; price: number;
       fee: number; fee_asset: string; reason: string; is_paper: boolean;
     }>(
-      `select id, timestamp, pair, side, quantity, price, fee, fee_asset, reason, is_paper
-       from trades where timestamp between $1 and $2 order by timestamp`,
-      [windowStart, windowEnd]
+      accountFilter
+        ? `select id, timestamp, pair, side, quantity, price, fee, fee_asset, reason, is_paper
+           from trades where timestamp between $1 and $2 and account_id = $3 order by timestamp`
+        : `select id, timestamp, pair, side, quantity, price, fee, fee_asset, reason, is_paper
+           from trades where timestamp between $1 and $2 order by timestamp`,
+      accountFilter ? [windowStart, windowEnd, accountFilter.id] : [windowStart, windowEnd]
     ),
     query<{
       id: string; timestamp: Date; asset: string; decision: string; confidence: number;
       reasoning: string; value_usdt: number; acted: boolean; is_paper: boolean;
     }>(
-      `select id, timestamp, asset, decision, confidence, reasoning, value_usdt, acted, is_paper
-       from position_reviews where timestamp between $1 and $2 order by timestamp`,
-      [windowStart, windowEnd]
+      accountFilter
+        ? `select id, timestamp, asset, decision, confidence, reasoning, value_usdt, acted, is_paper
+           from position_reviews where timestamp between $1 and $2 and account_id = $3 order by timestamp`
+        : `select id, timestamp, asset, decision, confidence, reasoning, value_usdt, acted, is_paper
+           from position_reviews where timestamp between $1 and $2 order by timestamp`,
+      accountFilter ? [windowStart, windowEnd, accountFilter.id] : [windowStart, windowEnd]
     ),
     query<{ timestamp: Date; asset: string; quantity: number; value_usdt: number }>(
-      `select timestamp, asset, quantity, value_usdt from wallet_snapshots
-       where timestamp between $1 and $2 order by timestamp`,
-      [windowStart, windowEnd]
+      accountFilter
+        ? `select timestamp, asset, quantity, value_usdt from wallet_snapshots
+           where timestamp between $1 and $2 and account_id = $3 order by timestamp`
+        : `select timestamp, asset, quantity, value_usdt from wallet_snapshots
+           where timestamp between $1 and $2 order by timestamp`,
+      accountFilter ? [windowStart, windowEnd, accountFilter.id] : [windowStart, windowEnd]
     ),
+    // news_items e sempre compartilhado entre contas (nao depende de qual
+    // Binance esta sendo lida) -- nunca filtra por conta.
     query<{ id: string; timestamp: Date; source: string; summary_pt: string; sentiment_score: number }>(
       `select id, timestamp, source, summary_pt, sentiment_score from news_items
        where timestamp between $1 and $2 order by timestamp`,
@@ -320,6 +353,13 @@ export async function loadRecentCycles(limit = 5): Promise<{ cycles: CycleView[]
     const seen = new Set<SectionKey>();
     let current: SectionKey = "header";
     for (const row of logRows.filter((r) => r.cycle_id === c.cycle_id)) {
+      // Linha marcada com "[Outra Conta]" enquanto uma conta diferente esta
+      // selecionada -- pula (ver lineIsAccountTagged). Sem etiqueta = contexto
+      // compartilhado, sempre entra.
+      if (accountFilter) {
+        const tag = lineIsAccountTagged(row.message, allAccountLabels);
+        if (tag && tag !== accountFilter.label) continue;
+      }
       const line: LogLine = { ts: row.timestamp.toISOString(), level: row.level, message: row.message };
       allLines.push(line);
       const sectionMatch = /^-- (.+) --$/.exec(row.message);

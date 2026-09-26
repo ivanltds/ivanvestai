@@ -12,7 +12,14 @@ export async function GET() {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const rows = await query<{ value: string }>(`select value from settings where key = 'bot_status' limit 1`);
+  // bot_status é sempre "master" (account_id IS NULL) -- filtro explícito desde
+  // 25/09/2026 (multi-conta-plano.md, Fase E, ver 10.8: settings ganhou chave
+  // composta, então key sozinha não é mais garantia de uma linha só; sem esse
+  // filtro, um futuro bot_status por conta -- seção 5.3 do plano, ainda não
+  // implementado -- poderia ser lido aqui por engano no lugar do master).
+  const rows = await query<{ value: string }>(
+    `select value from settings where key = 'bot_status' and account_id is null limit 1`
+  );
   // Mesmo default do lado do bot (core/config_store.py) -- começa pausado
   // por segurança até a tabela ter uma linha explícita.
   const status = rows[0]?.value === "running" ? "running" : "paused";

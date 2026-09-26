@@ -46,7 +46,11 @@ RSS_FEEDS = {
     "Bitcoin Magazine": "https://bitcoinmagazine.com/feed",
     "NewsBTC": "https://www.newsbtc.com/feed/",
     "Livecoins": "https://livecoins.com.br/feed/",
-    "Criptofácil": "https://www.criptofacil.com/feed/",
+    # "Criptofácil" removida em 26/09/2026 (multi-conta-plano.md 10.15/10.18): o
+    # certificado TLS do site dá "Hostname mismatch" tanto pra www.criptofacil.com
+    # quanto pra criptofacil.com (testado com as duas variantes) -- problema do
+    # lado do servidor/rede deles, fora do nosso controle. Sem essa fonte o bot
+    # segue com as outras 9 normalmente.
 }
 
 

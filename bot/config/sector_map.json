@@ -8,7 +8,7 @@
     "oracle_infra": ["LINK", "GRT", "RENDER", "AR", "FIL", "OCEAN", "AKT", "TAO"],
     "exchange_token": ["BNB", "OKB", "CRO", "GT", "KCS", "FTT"],
     "meme": ["DOGE", "SHIB", "PEPE", "FLOKI", "BONK", "WIF", "MEME", "BOME", "FARTCOIN"],
-    "stablecoin_excluded": ["USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD", "USDP"]
+    "stablecoin_excluded": ["USDT", "USDC", "BUSD", "FDUSD", "DAI", "TUSD", "USDP", "USD1", "PYUSD", "USDE", "USDD", "GUSD"]
   },
   "default_sector": "unknown"
 }

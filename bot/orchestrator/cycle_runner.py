@@ -61,8 +61,15 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
     config = load_runtime_config()
 
     # TTL do lock cobre coleta (~100 pares x 3 timeframes) + avaliação + gestão;
-    # um TTL curto deixava o lock expirar no meio de um ciclo lento.
-    if not redis_bridge.acquire_cycle_lock(ttl_seconds=max(600, config.entry_decision_timeout_seconds * 4)):
+    # um TTL curto deixava o lock expirar no meio de um ciclo lento. Antes era um
+    # piso fixo de 600s (10 min) -- fazia sentido quando o ciclo era de 15 min (o
+    # TTL nunca passava do próprio intervalo), mas com o ciclo em 5 min (ver
+    # multi-conta-plano.md 10.19) um travamento de verdade (processo morrendo sem
+    # liberar o lock) ia bloquear DOIS disparos seguintes em vez de só um. Agora o
+    # piso acompanha o intervalo configurado -- trava, na pior hipótese, só o
+    # próximo disparo, nunca mais que isso.
+    lock_ttl_seconds = max(config.cycle_interval_minutes * 60, config.entry_decision_timeout_seconds * 4)
+    if not redis_bridge.acquire_cycle_lock(ttl_seconds=lock_ttl_seconds):
         logger.warning("Ciclo anterior ainda em andamento (lock ativo) — pulando este disparo.")
         return
 

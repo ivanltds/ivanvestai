@@ -18,7 +18,7 @@ from core.indicators import (
     score_trend_following,
     volatility_signals,
 )
-from core.risk_rules import is_stablecoin, volatility_extreme
+from core.risk_rules import is_stablecoin, is_stablecoin_peg, volatility_extreme
 
 
 @dataclass
@@ -59,6 +59,7 @@ class MarketScannerAgent(BaseAgent):
         opportunities: list[ScannerOpportunity] = []
         skipped = 0
         skipped_volatility = 0
+        skipped_stablecoin_peg = 0
 
         for pair in pairs:
             base_asset = pair.removesuffix(settings.safety_stablecoin)
@@ -78,6 +79,15 @@ class MarketScannerAgent(BaseAgent):
                 candle_range_pct, atr_pct_avg, volume_ratio = volatility_signals(df_15m)
                 if volatility_extreme(candle_range_pct, atr_pct_avg, volume_ratio):
                     skipped_volatility += 1
+                    continue
+
+                # Stablecoin "nova" ainda fora da lista curada (multi-conta-plano.md
+                # 10.17, pedido do Ivan em 26/09/2026, achado no caso do USD1USDT):
+                # preço colado em $1 + volatilidade quase zero = trata como reserva,
+                # não como oportunidade de trade, mesmo sem estar em
+                # core.risk_rules.is_stablecoin() (que só cobre nomes já conhecidos).
+                if is_stablecoin_peg(float(df_15m["close"].iloc[-1]), atr_pct_avg):
+                    skipped_stablecoin_peg += 1
                     continue
 
                 regime = market_regime(df_4h)
@@ -138,5 +148,10 @@ class MarketScannerAgent(BaseAgent):
             vlog.warn(f"MarketScannerAgent: {skipped} par(es) pulado(s) (histórico insuficiente ou erro de API).")
         if skipped_volatility:
             vlog.warn(f"MarketScannerAgent: {skipped_volatility} par(es) pulado(s) (volatilidade extrema).")
+        if skipped_stablecoin_peg:
+            vlog.warn(
+                f"MarketScannerAgent: {skipped_stablecoin_peg} par(es) pulado(s) "
+                "(colado em $1, tratado como stablecoin/reserva -- ver 10.17)."
+            )
 
         return opportunities

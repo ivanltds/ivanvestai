@@ -34,6 +34,33 @@ def is_stablecoin(asset: str) -> bool:
     return asset.upper() in _SECTOR_DATA["sectors"].get("stablecoin_excluded", [])
 
 
+# Faixa de preço + teto de volatilidade que caracterizam um ativo "colado" em
+# $1 -- pedido do Ivan em 26/09/2026 (multi-conta-plano.md 10.17), depois de
+# achar que o USD1 (stablecoin nova, ainda não estava em stablecoin_excluded
+# acima) foi comprado pelo MarketScannerAgent como se fosse uma oportunidade
+# de trade normal, gastando USDT de reserva de verdade sem nenhum potencial
+# real de lucro (duas stablecoins entre si não têm "tendência" pra explorar).
+# `is_stablecoin` acima cobre a lista curada manualmente (rápido, sem custo);
+# esta função cobre o caso de uma stablecoin NOVA que ainda não foi
+# adicionada à lista -- detecta pelo comportamento (preço perto de $1 e
+# quase nenhuma volatilidade), não pelo nome. As duas checagens se
+# complementam: nenhuma sozinha é suficiente (a lista não pega o que ainda
+# não conhece; o comportamento sozinho poderia, em teoria, classificar por
+# engano um ativo real que por coincidência esteja valendo perto de US$1 e
+# momentaneamente parado -- caso raro, e o pior efeito colateral seria só
+# pular UM ciclo de avaliação desse ativo, não perder uma posição já aberta).
+STABLECOIN_PEG_PRICE_MIN = 0.98
+STABLECOIN_PEG_PRICE_MAX = 1.02
+STABLECOIN_PEG_ATR_PCT_MAX = 0.3  # ATR% médio (14 períodos) abaixo disso = sem "trend" de verdade
+
+
+def is_stablecoin_peg(last_close: float, atr_pct_avg: float) -> bool:
+    """True se o par se comporta como uma stablecoin (preço colado em $1 +
+    volatilidade quase zero), mesmo que o ativo não esteja na lista curada
+    de `is_stablecoin()` -- ver contexto acima."""
+    return STABLECOIN_PEG_PRICE_MIN <= last_close <= STABLECOIN_PEG_PRICE_MAX and atr_pct_avg < STABLECOIN_PEG_ATR_PCT_MAX
+
+
 def max_allocation_ok(order_value: float, total_equity: float, max_pct: float) -> bool:
     if total_equity <= 0:
         return False

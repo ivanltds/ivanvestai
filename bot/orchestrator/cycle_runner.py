@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import logging
 import math
 import re
@@ -16,11 +17,12 @@ from agents.market_scanner_agent import MarketScannerAgent
 from agents.portfolio_agent import PortfolioAgent
 from agents.portfolio_comparison_agent import PortfolioComparisonAgent
 from agents.position_review_agent import PositionReviewAgent
-from agents.risk_committee_agent import RiskCommitteeAgent, RiskCommitteeInput
+from agents.risk_committee_agent import FinalDecision, RiskCommitteeAgent, RiskCommitteeInput
 from agents.viability_agent import ViabilityAgent
 from core import redis_bridge, vlog
 from core.account_context import AccountContext, load_active_accounts
 from core.binance_client import BinanceClient, binance_client
+from core import connection_alert
 from core.config_store import RuntimeConfig, load_runtime_config
 from core.equity import daily_market_pnl_usdt
 from core.logging_setup import cycle_id_var
@@ -28,8 +30,10 @@ from core.notifier import alert
 from core.order_utils import oco_is_filled, summarize_oco_orders
 from core.risk_rules import MemeCoinSignals, circuit_breaker_triggered, in_macro_risk_window, meme_coin_eligible, round_step_size
 from config.settings import settings
-from db.models import CommitteeDecision, DailyEquity, NewsItem, Opportunity, Position, WalletSnapshot
+from core import strategy_profile
+from db.models import CommitteeDecision, DailyEquity, NewsItem, Opportunity, Position, Setting, WalletSnapshot
 from db.session import get_session
+from sqlalchemy import func
 from orchestrator.reconciliation import has_divergence, reconcile
 
 logger = logging.getLogger("ivanvestai.cycle_runner")
@@ -37,6 +41,83 @@ logger = logging.getLogger("ivanvestai.cycle_runner")
 # Piso conservador do valor mínimo de ordem da Binance (a maioria dos pares USDT
 # exige US$5; o valor exato por par é checado no PortfolioComparisonAgent).
 MIN_ORDER_VALUE_USDT = 5.0
+
+
+# Travas anti-recompra (28/09/2026, ver config/settings.py pair_cooldown_hours).
+# 29/09/2026, a pedido do Ivan: as travas valem POR CONTA. Cada conta é a
+# carteira de uma pessoa diferente -- uma conta nunca bloqueia nem influencia a
+# decisão da outra (duas contas podem estar na mesma moeda ao mesmo tempo).
+
+
+def _pair_entry_block_reason(pair: str, account_id) -> str | None:
+    """Motivo pra ESTA conta não entrar nesta moeda agora, ou None. Olha só as
+    posições da própria conta: posição já aberta, fechamento recente (pausa)
+    e quantidade de entradas nas últimas 24h."""
+    now = dt.datetime.now(dt.timezone.utc)
+    with get_session() as session:
+        if session.query(Position.id).filter(Position.pair == pair, Position.account_id == account_id, Position.status == "open").first():
+            return "já existe posição aberta nesta moeda nesta conta"
+        last_closed = (
+            session.query(func.max(Position.closed_at))
+            .filter(Position.pair == pair, Position.account_id == account_id, Position.status == "closed")
+            .scalar()
+        )
+        if last_closed is not None:
+            if last_closed.tzinfo is None:
+                last_closed = last_closed.replace(tzinfo=dt.timezone.utc)
+            elapsed_h = (now - last_closed).total_seconds() / 3600
+            if elapsed_h < settings.pair_cooldown_hours:
+                return (
+                    f"pausa pós-fechamento: fechada há {elapsed_h * 60:.0f} min "
+                    f"(espera {settings.pair_cooldown_hours:g}h)"
+                )
+        entries_24h = (
+            session.query(func.count(Position.id))
+            .filter(Position.pair == pair, Position.account_id == account_id, Position.opened_at >= now - dt.timedelta(hours=24))
+            .scalar()
+        ) or 0
+        if entries_24h >= settings.max_entries_per_pair_per_day:
+            return f"já teve {entries_24h} entrada(s) nas últimas 24h (máx {settings.max_entries_per_pair_per_day})"
+    return None
+
+
+_PAUSE_STATE_KEY = "final_pause_state"
+
+
+def _final_entry_pause(account: AccountContext, total_equity: float, day_pnl_pct: float | None) -> str | None:
+    """Pausa de novas entradas do perfil final (core/strategy_profile.py), por
+    conta. O estado (pico de patrimônio e fim da pausa) fica numa linha própria
+    da tabela settings (key=final_pause_state, account_id=<conta>), que o
+    config_store ignora. Pra zerar o pico depois de uma RETIRADA manual (que
+    parece queda), basta apagar essa linha -- o próximo ciclo recomeça do
+    patrimônio atual."""
+    now = dt.datetime.now(dt.timezone.utc)
+    with get_session() as session:
+        row = session.query(Setting).filter(Setting.key == _PAUSE_STATE_KEY, Setting.account_id == account.id).first()
+        state = strategy_profile.PauseState()
+        if row is not None:
+            try:
+                raw = json.loads(row.value)
+                state.peak_equity = raw.get("peak")
+                until = raw.get("until")
+                state.paused_until = dt.datetime.fromisoformat(until) if until else None
+            except (ValueError, TypeError):
+                logger.warning("[%s] final_pause_state ilegível (%r) -- recomeçando do zero.", account.label, row.value)
+        reason, new_state = strategy_profile.entry_pause_decision(
+            now=now, equity=total_equity, day_market_pnl_pct=day_pnl_pct, state=state,
+            daily_loss_pct=settings.final_pause_daily_loss_pct,
+            drawdown_pct=settings.final_pause_drawdown_pct,
+            pause_days=settings.final_pause_days,
+        )
+        value = json.dumps({
+            "peak": new_state.peak_equity,
+            "until": new_state.paused_until.isoformat() if new_state.paused_until else None,
+        })
+        if row is None:
+            session.add(Setting(key=_PAUSE_STATE_KEY, value=value, account_id=account.id))
+        elif row.value != value:
+            row.value = value
+    return reason
 
 
 async def run_cycle(*, ignore_macro_window: bool = False) -> None:
@@ -182,6 +263,8 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
         # "master" da tabela settings com os específicos dessa conta, se existirem)
         # em vez do `config` único e global usado até aqui -- é isso que faz um
         # teto de alocação/confiança mínima diferente por conta valer de verdade.
+        entry_pause_reasons: dict = {}
+
         async def _collect_account_state(
             account: AccountContext,
         ) -> tuple[AccountContext, float, float, RuntimeConfig] | None:
@@ -202,7 +285,10 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
             portfolio_agent = PortfolioAgent(binance=account.binance, account_id=account.id)
             try:
                 wallet_snapshots = await asyncio.to_thread(portfolio_agent.run)
-            except Exception:
+            except Exception as exc:
+                # Alerta dedicado (e-mail/push, com IP atual) se for erro de
+                # autenticação -2015/-2014/-2008 -- ver core/connection_alert.py.
+                await asyncio.to_thread(connection_alert.report_failure, account.label, exc)
                 logger.exception("[%s] Falha ao ler carteira -- conta pulada neste ciclo.", account.label)
                 vlog.fail(f"[{account.label}] Falha ao ler carteira — conta pulada neste ciclo.")
                 redis_bridge.publish_event(
@@ -210,6 +296,7 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
                 )
                 return None
 
+            await asyncio.to_thread(connection_alert.report_success, account.label)
             total_equity = PortfolioAgent.total_equity_usdt(wallet_snapshots)
             # Saldo LIVRE na stablecoin de segurança (não o patrimônio total) --
             # necessário porque max_allocation_pct_per_trade sugere um valor em %
@@ -225,11 +312,24 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
                 f"(livre em {account_config.safety_stablecoin}: ${available_stablecoin:,.2f})"
             )
 
+            day_pnl_pct = None
             try:
-                _check_circuit_breaker(total_equity, account_config.daily_loss_alert_pct, account)
+                day_pnl_pct = _check_circuit_breaker(total_equity, account_config.daily_loss_alert_pct, account)
             except Exception:
                 logger.exception("[%s] Falha na checagem do circuit breaker — ciclo segue.", account.label)
                 vlog.fail(f"[{account.label}] Falha na checagem do circuit breaker — ciclo segue mesmo assim.")
+
+            # Perfil final (29/09/2026): pausa de NOVAS entradas por perda do dia
+            # ou queda do pico -- nunca mexe na gestão de posições abertas.
+            # Falha ao calcular = pausa por segurança neste ciclo.
+            if strategy_profile.is_final():
+                try:
+                    reason = await asyncio.to_thread(_final_entry_pause, account, total_equity, day_pnl_pct)
+                except Exception:
+                    logger.exception("[%s] Falha calculando a pausa do perfil final -- sem entradas neste ciclo.", account.label)
+                    reason = "falha ao calcular a pausa (segurança)"
+                if reason:
+                    entry_pause_reasons[account.id] = reason
 
             # Revisão de posições PRÉ-EXISTENTES na carteira (compradas manualmente
             # antes do bot existir, ou há muito tempo) -- roda independente de haver
@@ -293,6 +393,11 @@ async def run_cycle(*, ignore_macro_window: bool = False) -> None:
             """Isolamento de erro por conta preservado idêntico ao loop
             sequencial de antes (arquitetura-tecnica.md 9.13) -- só o `for`
             virou `asyncio.gather` (ver comentário da seção acima)."""
+            pause = entry_pause_reasons.get(account.id)
+            if pause:
+                logger.warning("[%s] Perfil final: novas entradas pausadas -- %s.", account.label, pause)
+                vlog.warn(f"[{account.label}] Novas entradas pausadas — {pause}.")
+                return
             try:
                 await _evaluate_opportunities(
                     opportunities, news_items, total_equity, available_stablecoin, cycle_id,
@@ -419,9 +524,11 @@ async def _evaluate_opportunities(
     risk_committee = RiskCommitteeAgent(
         min_confidence_to_trade=config.min_confidence_to_trade, account_id=account.id,
     )
+    final_profile = strategy_profile.is_final()
     execution_agent = ExecutionAgent(
         binance=account.binance, dry_run=account.dry_run,
         safety_stablecoin=config.safety_stablecoin, account_id=account.id,
+        final_profile=final_profile,
     )
 
     with get_session() as session:
@@ -449,6 +556,16 @@ async def _evaluate_opportunities(
             return
 
         vlog.step("🔎", "Oportunidade", f"[{account.label}] {opp.pair} ({opp.strategy}, regime={opp.regime})")
+        # Travas anti-recompra (28/09/2026): checadas ANTES de qualquer chamada
+        # de LLM, pra não gastar custo avaliando uma moeda que não pode entrar.
+        try:
+            block_reason = await asyncio.to_thread(_pair_entry_block_reason, opp.pair, account.id)
+        except Exception:
+            logger.warning("[%s] Falha checando travas anti-recompra de %s -- oportunidade pulada por segurança.", account.label, opp.pair)
+            continue
+        if block_reason:
+            vlog.step("⏸️", "Anti-recompra", f"[{account.label}] {opp.pair} pulada — {block_reason}.")
+            continue
         # Achado 24/09/2026 (arquitetura-tecnica.md 9.26, item 3): antes comparava
         # o ticker como substring crua dentro do título em maiúsculas, sem
         # word-boundary -- tickers curtos/coincidentes com palavras comuns em
@@ -492,78 +609,111 @@ async def _evaluate_opportunities(
             continue
         vlog.step("🛡️", "PortfolioComparisonAgent", f"[{account.label}] aprovado — {'; '.join(portfolio_check.reasons)}")
 
-        # try/except por oportunidade: uma falha pontual do LLM (parse
-        # malformado -- risco mais alto quando filter_agent_provider=deepseek,
-        # ver core/llm_client.py) pula só esta oportunidade, não cancela as
-        # demais do ciclo (a proteção de asyncio.wait_for em volta do ciclo
-        # inteiro, da correção 9.13, continua existindo, mas é bem mais
-        # grossa que isto).
-        try:
-            viability_verdict = await asyncio.to_thread(viability_agent.evaluate, opp, relevant_news)
-        except Exception:
-            logger.warning("ViabilityAgent falhou ao avaliar %s -- oportunidade pulada neste ciclo.", opp.pair)
-            vlog.fail(f"ViabilityAgent falhou ao avaliar {opp.pair} — pulando esta oportunidade.")
-            continue
-        vlog.step("🧭", "ViabilityAgent", f"{viability_verdict.decision} (confiança={viability_verdict.confidence:.0%})")
-
-        # Aqui o portfólio já aprovou; reconcilia só se o ViabilityAgent discordar.
-        if has_divergence(viability_verdict, portfolio_check):
+        if final_profile:
+            # Perfil final (29/09/2026, core/strategy_profile.py): a entrada é
+            # decidida por REGRA (o scanner já aplicou filtro de BTC e universo,
+            # o PortfolioComparisonAgent acabou de aprovar capital/correlação).
+            # A IA de viabilidade roda só como SOMBRA: a opinião dela é gravada
+            # pra medir depois se ajudaria, mas não aprova nem veta. O
+            # RiskCommitteeAgent não é chamado -- stop vem de 2 x ATR(14) do 1h.
+            viability_verdict = None
             try:
-                viability_verdict = await asyncio.to_thread(
-                    reconcile, viability_agent, opp, viability_verdict, portfolio_check, account.id
-                )
+                viability_verdict = await asyncio.to_thread(viability_agent.evaluate, opp, relevant_news)
+                vlog.step("🧭", "ViabilityAgent (sombra)", f"{viability_verdict.decision} "
+                          f"(confiança={viability_verdict.confidence:.0%}) — só registrado, não decide")
             except Exception:
-                logger.warning("Reconciliação falhou para %s -- oportunidade pulada neste ciclo.", opp.pair)
-                vlog.fail(f"Reconciliação falhou para {opp.pair} — pulando esta oportunidade.")
+                logger.warning("[%s] ViabilityAgent (sombra) falhou em %s -- entrada segue pela regra.", account.label, opp.pair)
+            try:
+                current_price = account.binance.get_last_price(opp.pair)
+                df_1h = account.binance.get_klines_df(opp.pair, "1h", limit=120, closed_only=True)
+                stop_pct = strategy_profile.stop_pct_from_atr_1h(df_1h, current_price)
+            except Exception as exc:
+                logger.warning("[%s] Perfil final: sem preço/ATR de 1h pra %s (%r) -- oportunidade pulada.", account.label, opp.pair, exc)
+                vlog.fail(f"[{account.label}] Sem preço/ATR de 1h pra {opp.pair} — pulando esta oportunidade.")
+                continue
+            final = FinalDecision(
+                approve=True,
+                aggregated_confidence=1.0,
+                stop_loss_pct=stop_pct,
+                take_profit_pct=0.0,
+                use_trailing_stop=True,
+                reasoning=(f"Perfil final: entrada por regra. Stop inicial {stop_pct:.2f}% (2 x ATR 1h); sem alvo; "
+                           f"stop móvel após +{settings.final_trailing_activation_pct:g}% a "
+                           f"{settings.final_trailing_distance_pct:g}% do topo."),
+            )
+        else:
+            # try/except por oportunidade: uma falha pontual do LLM (parse
+            # malformado -- risco mais alto quando filter_agent_provider=deepseek,
+            # ver core/llm_client.py) pula só esta oportunidade, não cancela as
+            # demais do ciclo (a proteção de asyncio.wait_for em volta do ciclo
+            # inteiro, da correção 9.13, continua existindo, mas é bem mais
+            # grossa que isto).
+            try:
+                viability_verdict = await asyncio.to_thread(viability_agent.evaluate, opp, relevant_news)
+            except Exception:
+                logger.warning("ViabilityAgent falhou ao avaliar %s -- oportunidade pulada neste ciclo.", opp.pair)
+                vlog.fail(f"ViabilityAgent falhou ao avaliar {opp.pair} — pulando esta oportunidade.")
+                continue
+            vlog.step("🧭", "ViabilityAgent", f"{viability_verdict.decision} (confiança={viability_verdict.confidence:.0%})")
+
+            # Aqui o portfólio já aprovou; reconcilia só se o ViabilityAgent discordar.
+            if has_divergence(viability_verdict, portfolio_check):
+                try:
+                    viability_verdict = await asyncio.to_thread(
+                        reconcile, viability_agent, opp, viability_verdict, portfolio_check, account.id
+                    )
+                except Exception:
+                    logger.warning("Reconciliação falhou para %s -- oportunidade pulada neste ciclo.", opp.pair)
+                    vlog.fail(f"Reconciliação falhou para {opp.pair} — pulando esta oportunidade.")
+                    continue
+
+            # Achado 24/09/2026 (arquitetura-tecnica.md 9.21 item 16): `atr_ref or 0.0`
+            # não protegia contra NaN -- `bool(float("nan"))` é True em Python, então
+            # `nan or 0.0` devolve `nan`, não 0.0. Isso alimentaria o RiskCommitteeAgent
+            # (atr_pct no prompt do LLM, usado pra calibrar stop/take) com "ATR%: nan".
+            # Rede de segurança aqui (core/indicators.py já levanta exceção se o ATR vier
+            # NaN de score_breakout, então isso não deveria mais disparar na prática --
+            # mas cobre qualquer outro caminho que ainda não tenha essa checagem).
+            atr_ref_raw = opp.votes_summary.get("atr_reference", {}).get("value", {}).get("atr", 0.0)
+            atr_ref = atr_ref_raw if atr_ref_raw and not math.isnan(atr_ref_raw) else 0.0
+
+            # Preço atual -- necessário tanto pro ATR% que o RiskCommitteeAgent usa
+            # pra calibrar stop/take (antes vinha sempre 0.0 e o atr_pct caía no
+            # fallback de 1.0, sem refletir a volatilidade real do ativo) quanto
+            # pra converter o valor sugerido em USD numa quantidade real do ativo
+            # logo abaixo (bug corrigido nesta revisão -- ver arquitetura-tecnica.md
+            # 9.6: o valor em dólar era mandado direto como "quantidade" pra
+            # Binance, o que teria gerado uma ordem com erro de grandeza gigantesco).
+            try:
+                current_price = account.binance.get_last_price(opp.pair)
+            except Exception:
+                logger.warning("[%s] Não consegui buscar o preço atual de %s -- oportunidade pulada neste ciclo.", account.label, opp.pair)
+                vlog.fail(f"[{account.label}] Não consegui buscar o preço atual de {opp.pair} — pulando esta oportunidade.")
                 continue
 
-        # Achado 24/09/2026 (arquitetura-tecnica.md 9.21 item 16): `atr_ref or 0.0`
-        # não protegia contra NaN -- `bool(float("nan"))` é True em Python, então
-        # `nan or 0.0` devolve `nan`, não 0.0. Isso alimentaria o RiskCommitteeAgent
-        # (atr_pct no prompt do LLM, usado pra calibrar stop/take) com "ATR%: nan".
-        # Rede de segurança aqui (core/indicators.py já levanta exceção se o ATR vier
-        # NaN de score_breakout, então isso não deveria mais disparar na prática --
-        # mas cobre qualquer outro caminho que ainda não tenha essa checagem).
-        atr_ref_raw = opp.votes_summary.get("atr_reference", {}).get("value", {}).get("atr", 0.0)
-        atr_ref = atr_ref_raw if atr_ref_raw and not math.isnan(atr_ref_raw) else 0.0
-
-        # Preço atual -- necessário tanto pro ATR% que o RiskCommitteeAgent usa
-        # pra calibrar stop/take (antes vinha sempre 0.0 e o atr_pct caía no
-        # fallback de 1.0, sem refletir a volatilidade real do ativo) quanto
-        # pra converter o valor sugerido em USD numa quantidade real do ativo
-        # logo abaixo (bug corrigido nesta revisão -- ver arquitetura-tecnica.md
-        # 9.6: o valor em dólar era mandado direto como "quantidade" pra
-        # Binance, o que teria gerado uma ordem com erro de grandeza gigantesco).
-        try:
-            current_price = account.binance.get_last_price(opp.pair)
-        except Exception:
-            logger.warning("[%s] Não consegui buscar o preço atual de %s -- oportunidade pulada neste ciclo.", account.label, opp.pair)
-            vlog.fail(f"[{account.label}] Não consegui buscar o preço atual de {opp.pair} — pulando esta oportunidade.")
-            continue
-
-        # try/except aqui é novo em 25/09/2026: agora que risk_committee_agent
-        # também pode rodar em DeepSeek (a pedido do Ivan, ver docstring da
-        # classe), uma falha de parse pontual (mais provável no modo JSON
-        # manual do DeepSeek do que no Structured Outputs nativo da OpenAI)
-        # não pode mais abortar a avaliação de TODAS as oportunidades
-        # restantes desta conta no ciclo -- pula só esta, igual ao
-        # ViabilityAgent/reconciliação logo acima.
-        try:
-            final = await asyncio.to_thread(
-                risk_committee.decide,
-                RiskCommitteeInput(
-                    pair=opp.pair,
-                    viability_verdict=viability_verdict,
-                    portfolio_check=portfolio_check,
-                    news_sentiment_avg=news_avg,
-                    atr_reference=atr_ref or 0.0,
-                    entry_price=current_price,
-                ),
-            )
-        except Exception:
-            logger.warning("[%s] RiskCommitteeAgent falhou ao decidir %s -- oportunidade pulada neste ciclo.", account.label, opp.pair)
-            vlog.fail(f"[{account.label}] RiskCommitteeAgent falhou ao decidir {opp.pair} — pulando esta oportunidade.")
-            continue
+            # try/except aqui é novo em 25/09/2026: agora que risk_committee_agent
+            # também pode rodar em DeepSeek (a pedido do Ivan, ver docstring da
+            # classe), uma falha de parse pontual (mais provável no modo JSON
+            # manual do DeepSeek do que no Structured Outputs nativo da OpenAI)
+            # não pode mais abortar a avaliação de TODAS as oportunidades
+            # restantes desta conta no ciclo -- pula só esta, igual ao
+            # ViabilityAgent/reconciliação logo acima.
+            try:
+                final = await asyncio.to_thread(
+                    risk_committee.decide,
+                    RiskCommitteeInput(
+                        pair=opp.pair,
+                        viability_verdict=viability_verdict,
+                        portfolio_check=portfolio_check,
+                        news_sentiment_avg=news_avg,
+                        atr_reference=atr_ref or 0.0,
+                        entry_price=current_price,
+                    ),
+                )
+            except Exception:
+                logger.warning("[%s] RiskCommitteeAgent falhou ao decidir %s -- oportunidade pulada neste ciclo.", account.label, opp.pair)
+                vlog.fail(f"[{account.label}] RiskCommitteeAgent falhou ao decidir {opp.pair} — pulando esta oportunidade.")
+                continue
 
         with get_session() as session:
             opportunity_row = Opportunity(
@@ -579,11 +729,13 @@ async def _evaluate_opportunities(
             session.add(opportunity_row)
             session.flush()
 
-            session.add(CommitteeDecision(
-                opportunity_id=opportunity_row.id, agent_name=viability_agent.name,
-                decision=viability_verdict.decision, confidence=viability_verdict.confidence,
-                reasoning=viability_verdict.reasoning, model_used=viability_agent.model,
-            ))
+            if viability_verdict is not None:
+                session.add(CommitteeDecision(
+                    opportunity_id=opportunity_row.id, agent_name=viability_agent.name,
+                    decision=viability_verdict.decision, confidence=viability_verdict.confidence,
+                    reasoning=("[sombra -- não decidiu] " if final_profile else "") + viability_verdict.reasoning,
+                    model_used=viability_agent.model,
+                ))
             session.add(CommitteeDecision(
                 opportunity_id=opportunity_row.id, agent_name=portfolio_agent.name,
                 decision="approve" if portfolio_check.approved else "reject",
@@ -591,10 +743,11 @@ async def _evaluate_opportunities(
                 reasoning="; ".join(portfolio_check.reasons), model_used="rule-based",
             ))
             session.add(CommitteeDecision(
-                opportunity_id=opportunity_row.id, agent_name=risk_committee.name,
+                opportunity_id=opportunity_row.id,
+                agent_name="strategy_rules_final" if final_profile else risk_committee.name,
                 decision="approve" if final.approve else "reject",
                 confidence=final.aggregated_confidence, reasoning=final.reasoning,
-                model_used=risk_committee.model,
+                model_used="rule-based" if final_profile else risk_committee.model,
             ))
 
         redis_bridge.publish_event(
@@ -605,7 +758,9 @@ async def _evaluate_opportunities(
             },
         )
 
-        if final.approve:
+        if final.approve and final_profile:
+            vlog.ok(f"📐 [{account.label}] Regra do perfil final: APROVADO (stop inicial {final.stop_loss_pct:.2f}%, sem alvo) — indo pra execução.")
+        elif final.approve:
             vlog.ok(f"⚖️  [{account.label}] RiskCommitteeAgent: APROVADO (confiança={final.aggregated_confidence:.0%}) — indo pra execução.")
         else:
             vlog.warn(f"⚖️  [{account.label}] RiskCommitteeAgent: reprovado ({final.reasoning[:80]})")
@@ -824,6 +979,9 @@ def _manage_open_positions(quiet: bool = False) -> None:
             if not quiet:
                 vlog.step("👀", position.pair, f"[{account.label}] seguindo aberta @ ~${current_price:,.4f}, sem gatilho de saída.")
         except Exception as exc:
+            # Alerta dedicado de perda de autenticação (tem seu próprio controle
+            # de repetição: 1º aviso imediato, lembrete a cada 1h).
+            connection_alert.report_failure(account.label, exc)
             # Com o monitor rodando a cada minuto, uma venda que falha repetiria o
             # mesmo erro/alerta 60x por hora: só registra de novo se a mensagem mudou
             # ou passaram 15 min desde o último aviso desta posição.
@@ -886,7 +1044,7 @@ def _reconcile_oco(execution_agent: ExecutionAgent, position: Position, tag: str
     return True
 
 
-def _check_circuit_breaker(total_equity_now: float, alert_pct: float, account: AccountContext) -> None:
+def _check_circuit_breaker(total_equity_now: float, alert_pct: float, account: AccountContext) -> float | None:
     """Alerta de perda diária baseado no P&L de MERCADO do dia (core/equity.py), não na
     diferença bruta de patrimônio: aportes e retiradas manuais não contam como perda
     (achado em 19/09/2026: alerta de "-28%" causado por US$26,6 em NEAR movidos pra fora
@@ -941,11 +1099,11 @@ def _check_circuit_breaker(total_equity_now: float, alert_pct: float, account: A
                     "[%s] Patrimônio de hoje ($%.2f) abaixo de $%.2f -- ainda não estabelece baseline do circuit "
                     "breaker, tenta de novo no próximo ciclo.", account.label, total_equity_now, MIN_ORDER_VALUE_USDT,
                 )
-                return
+                return None
             session.add(DailyEquity(
                 date=today, equity_brl=equity_brl, equity_usdt=total_equity_now, account_id=account.id,
             ))
-            return
+            return 0.0
         start_of_day_equity = row.equity_usdt
 
     pnl_today = daily_market_pnl_usdt(today, account_id=account.id)
@@ -966,3 +1124,7 @@ def _check_circuit_breaker(total_equity_now: float, alert_pct: float, account: A
                       f"variação de mercado ${pnl_today:+,.2f} ({pnl_pct:+.1%}).")
     else:
         vlog.ok(f"[{account.label}] Circuit breaker: variação de mercado hoje ${pnl_today:+,.2f} ({pnl_pct:+.1%}) — dentro do limite.")
+    # Devolve a variação de mercado do dia (fração) -- usada pela pausa de
+    # entradas do perfil final (core/strategy_profile.py). Só leitura; o
+    # alerta acima continua exatamente como antes.
+    return pnl_pct

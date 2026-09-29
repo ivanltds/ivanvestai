@@ -9,4 +9,15 @@
 // dashboard, que mostra a visão agregada de todas as contas (seção 6 do
 // plano) -- não faz sentido ela divergir por conta, então fica sempre
 // global mesmo editando com uma conta selecionada.
-export const ALWAYS_GLOBAL_KEYS = new Set<string>(["display_currency"]);
+//
+// Perfil de estratégia e travas do perfil final (29/09/2026) também são sempre
+// globais: o scanner roda UMA vez por ciclo pra todas as contas, e o bot aplica
+// esses valores no objeto `settings` compartilhado (bot/core/config_store.py).
+export const ALWAYS_GLOBAL_KEYS = new Set<string>([
+  "display_currency",
+  "strategy_profile",
+  "final_max_fear_greed",
+  "final_pause_daily_loss_pct",
+  "final_pause_drawdown_pct",
+  "final_pause_days",
+]);

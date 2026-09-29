@@ -43,6 +43,8 @@ from config.settings import settings
 from core.binance_client import BinanceClient, binance_client
 from core.notifier import alert
 from core.order_utils import Fill, oco_price_levels, parse_market_fill, trailing_distance_pct
+from core import strategy_profile
+from core.exit_rules import update_trailing
 from core.risk_rules import round_step_size
 from db.models import Position, Trade
 from db.session import get_session
@@ -65,6 +67,7 @@ class ExecutionAgent(BaseAgent):
         safety_stablecoin: str | None = None,
         enable_oco: bool | None = None,
         account_id: uuid.UUID | None = None,
+        final_profile: bool | None = None,
     ) -> None:
         # Multi-conta (multi-conta-plano.md, Fase B/C): todo parâmetro é
         # opcional e cai pro comportamento de hoje (client/config globais) se
@@ -82,6 +85,11 @@ class ExecutionAgent(BaseAgent):
         self._safety_stablecoin = safety_stablecoin if safety_stablecoin is not None else settings.safety_stablecoin
         self._enable_oco = enable_oco if enable_oco is not None else settings.enable_oco
         self._account_id = account_id
+        # Perfil "final" (29/09/2026, core/strategy_profile.py): posições NOVAS
+        # abrem sem alvo e com stop móvel (que só arma depois de +3%). Só afeta
+        # open_position -- a gestão de posições já abertas decide pela própria
+        # posição (strategy_profile.uses_final_exits), nunca pelo perfil atual.
+        self._final_profile = final_profile if final_profile is not None else strategy_profile.is_final()
 
     def _base_asset(self, pair: str) -> str:
         return pair.removesuffix(self._safety_stablecoin)
@@ -145,14 +153,19 @@ class ExecutionAgent(BaseAgent):
 
         try:
             with get_session() as session:
+                # Perfil final: sem alvo (take_price vazio) e sempre com stop móvel --
+                # essa combinação é também o marcador que a gestão usa pra aplicar
+                # as regras de saída do perfil a ESTA posição, mesmo que o .env
+                # volte pra "legacy" depois (strategy_profile.uses_final_exits).
+                final = self._final_profile
                 position = Position(
                     pair=pair,
                     quantity=fill.quantity,
                     avg_entry_price=fill.price,
                     stop_price=fill.price * (1 - decision.stop_loss_pct / 100),
-                    take_price=fill.price * (1 + decision.take_profit_pct / 100),
-                    trailing_active=decision.use_trailing_stop,
-                    trailing_reference_price=fill.price if decision.use_trailing_stop else None,
+                    take_price=None if final else fill.price * (1 + decision.take_profit_pct / 100),
+                    trailing_active=True if final else decision.use_trailing_stop,
+                    trailing_reference_price=fill.price if (final or decision.use_trailing_stop) else None,
                     is_paper=is_paper,
                     account_id=self._account_id,
                 )
@@ -192,7 +205,7 @@ class ExecutionAgent(BaseAgent):
         # db/models.py:Position.oco_order_list_id). Best-effort: falha aqui
         # NUNCA derruba open_position -- a posição já está criada e protegida
         # por stop/take via software (comportamento de sempre) de qualquer jeito.
-        if not is_paper and self._enable_oco and not decision.use_trailing_stop:
+        if not is_paper and self._enable_oco and not decision.use_trailing_stop and not self._final_profile:
             self._try_place_oco(position, fill)
 
         return trade
@@ -508,6 +521,9 @@ class ExecutionAgent(BaseAgent):
         apertava o stop além do decidido na primeira alta pequena."""
         if not position.trailing_active:
             return
+        if strategy_profile.uses_final_exits(position.take_price, position.trailing_active):
+            self._update_final_trailing(position, current_price)
+            return
         if current_price > (position.trailing_reference_price or 0):
             trail_pct = trailing_distance_pct(position.trailing_reference_price, position.stop_price)
             new_stop = current_price * (1 - trail_pct / 100)
@@ -526,3 +542,25 @@ class ExecutionAgent(BaseAgent):
                 # eventos publicados no Redis, log) refletir o stop real.
                 position.trailing_reference_price = db_position.trailing_reference_price
                 position.stop_price = db_position.stop_price
+
+    def _update_final_trailing(self, position: Position, current_price: float) -> None:
+        """Stop móvel do perfil final (core/strategy_profile.py): a referência
+        (maior preço visto) sobe sempre; o stop só começa a subir depois de +3%
+        sobre a entrada e fica 2% abaixo da referência. Nunca desce. Mesma
+        função (core/exit_rules.update_trailing) que o simulador usou."""
+        ref = position.trailing_reference_price or position.avg_entry_price
+        if current_price <= ref:
+            return
+        entry = position.avg_entry_price
+        initial_stop_pct = (1 - (position.stop_price or entry) / entry) * 100 if entry else 0.0
+        new_ref, new_stop = update_trailing(
+            entry_price=entry, reference_price=ref, stop_price=position.stop_price or 0.0,
+            initial_stop_pct=initial_stop_pct, price=current_price, cfg=strategy_profile.final_exit_config(),
+        )
+        with get_session() as session:
+            db_position = session.get(Position, position.id)
+            db_position.trailing_reference_price = new_ref
+            if new_stop > (db_position.stop_price or 0):
+                db_position.stop_price = new_stop
+            position.trailing_reference_price = db_position.trailing_reference_price
+            position.stop_price = db_position.stop_price

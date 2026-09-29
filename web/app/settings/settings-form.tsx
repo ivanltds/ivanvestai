@@ -26,6 +26,19 @@ const FIELDS: {
   { key: "top_n_pairs", label: "Top N pares por liquidez", type: "number" },
   { key: "cycle_interval_minutes", label: "Intervalo do ciclo (minutos)", type: "number" },
   {
+    key: "strategy_profile",
+    label: "Estratégia",
+    type: "select",
+    options: [
+      { value: "final", label: "Final -- regras testadas no simulador (filtro BTC, stop por ATR, trailing)" },
+      { value: "legacy", label: "Antiga -- comitê de IA decide (legacy)" },
+    ],
+  },
+  { key: "final_max_fear_greed", label: "Final: só compra com Medo e Ganância até (0-100; 0 desliga)", type: "number" },
+  { key: "final_pause_daily_loss_pct", label: "Final: pausa compras no dia com perda de (%; 0 desliga)", type: "number" },
+  { key: "final_pause_drawdown_pct", label: "Final: pausa compras com queda do pico de (%; 0 desliga)", type: "number" },
+  { key: "final_pause_days", label: "Final: duração da pausa por queda (dias)", type: "number" },
+  {
     key: "bypass_macro_risk_window",
     label: "Desbloquear entradas novas durante janela de risco macro (FOMC/CPI)",
     type: "checkbox",

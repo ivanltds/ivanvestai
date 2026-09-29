@@ -125,6 +125,17 @@ class Settings(BaseSettings):
     # 10% escolhido pelo Ivan (bem acima de qualquer piso/ATR real observado até
     # aqui, então não deve afetar decisões normais do comitê).
     max_stop_loss_pct: float = 10.0
+    # Travas anti-recompra (28/09/2026, multi-conta-plano.md 10.21): no dia 28/09 o
+    # bot fez 63 operações, 49 delas recomprando uma moeda que tinha acabado de
+    # fechar (QNT 9x em 1h, NMR várias vezes), com as duas contas entrando juntas.
+    # Tudo POR CONTA (29/09/2026, a pedido do Ivan: cada conta é a carteira de
+    # uma pessoa diferente, uma nunca influencia a decisão da outra).
+    # - pair_cooldown_hours: depois que a conta fecha uma posição numa moeda
+    #   (stop ou take), ELA não entra nessa moeda de novo por N horas.
+    # - max_entries_per_pair_per_day: no máximo N entradas da conta numa mesma
+    #   moeda em 24h.
+    pair_cooldown_hours: float = 4.0
+    max_entries_per_pair_per_day: int = 2
     max_take_profit_pct: float = 10.0
     # OCO (stop + take na própria exchange, ver core/order_utils.py e
     # agents/execution_agent.py) -- desligado por padrão, mesmo padrão de opt-in
@@ -136,6 +147,10 @@ class Settings(BaseSettings):
     # Intervalo do monitor rápido de stop/take/trailing das posições abertas (entre os
     # ciclos de 15 min). 0 desliga. Ver orchestrator/cycle_runner.monitor_open_positions.
     risk_monitor_seconds: int = 60
+    # Coletor de métricas de mercado (funding, contratos em aberto, proporção de
+    # posições, Medo e Ganância -- core/market_metrics.py, 29/09/2026). Só grava
+    # dados, não decide nada. 0 desliga.
+    market_metrics_minutes: int = 60
     max_allocation_pct_per_trade: float = 0.50
     # Teto de alocação separado (mais apertado) pra oportunidades que batem no
     # critério de "meme coin"/alto risco tolerado (core.risk_rules.meme_coin_eligible
@@ -148,6 +163,34 @@ class Settings(BaseSettings):
     # quando a oportunidade é elegível.
     meme_coin_max_allocation_pct: float = 0.05
     daily_loss_alert_pct: float = 0.10
+
+    # Perfil de estratégia (29/09/2026, "Plano de melhoria da estratégia"; ver
+    # core/strategy_profile.py). "legacy" = comportamento de antes; "final" =
+    # versão final validada no simulador run_backtest_v2.py. Opt-in manual SÓ
+    # via .env (STRATEGY_PROFILE=final), mesmo padrão de dry_run/enable_oco --
+    # nunca pelo dashboard. Os valores final_* abaixo são os testados; mudar
+    # qualquer um deles é rodar algo que o simulador não validou.
+    # Desde 29/09/2026 o perfil e as travas do perfil final (Medo e Ganância e
+    # pausas) são editáveis em /settings (core/config_store.py); o .env só vale
+    # enquanto a chave nunca foi salva no dashboard. Padrão agora é "final".
+    strategy_profile: str = "final"
+    final_trailing_activation_pct: float = 3.0
+    final_trailing_distance_pct: float = 2.0
+    final_stop_atr_1h_mult: float = 2.0
+    final_stop_min_pct: float = 2.0
+    final_stop_max_pct: float = 8.0
+    final_min_price_usdt: float = 0.05
+    final_min_quote_volume_24h: float = 20_000_000.0
+    final_pair_denylist: str = "KITE,AUDIO,MUBARAK,ONE,BANK"
+    final_pause_daily_loss_pct: float = 3.0
+    final_pause_drawdown_pct: float = 10.0
+    final_pause_days: float = 7.0
+    # Trava de Medo e Ganância (29/09/2026, estudo de dados extras): no perfil
+    # final, só abre compra nova com o índice (alternative.me) <= este valor.
+    # 0 desliga. Sem o índice (API fora e sem valor recente no banco) = libera,
+    # igual ao simulador. Editável em /settings.
+    final_max_fear_greed: float = 50.0
+
     top_n_pairs: int = 100
     safety_stablecoin: str = "USDT"
     timezone: str = "America/Sao_Paulo"

@@ -16,6 +16,12 @@ const DEFAULTS: Record<string, string> = {
   cycle_interval_minutes: "15",
   display_currency: "BRL",
   bypass_macro_risk_window: "false",
+  // Mesmos defaults de bot/config/settings.py (29/09/2026).
+  strategy_profile: "final",
+  final_max_fear_greed: "50",
+  final_pause_daily_loss_pct: "3",
+  final_pause_drawdown_pct: "10",
+  final_pause_days: "7",
 };
 
 export const dynamic = "force-dynamic";
@@ -124,8 +130,8 @@ export default async function SettingsPage({
         <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, maxWidth: 460, lineHeight: 1.5 }}>
           Editando só a conta <strong>{selectedAccount.label}</strong>. Um campo marcado &quot;próprio desta conta&quot;
           abaixo já tem um valor diferente do Padrão -- os demais mostram e usam o valor Padrão até você mudar e
-          salvar aqui (o que cria um override só pra esta conta, sem afetar as outras). Moeda de exibição é sempre
-          do Padrão, não dá pra divergir por conta.
+          salvar aqui (o que cria um override só pra esta conta, sem afetar as outras). Moeda de exibição, estratégia e travas do
+          perfil final valem sempre para todas as contas (gravam no Padrão).
         </p>
       )}
 

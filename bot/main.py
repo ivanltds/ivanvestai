@@ -116,6 +116,17 @@ async def sync_cycle_interval(scheduler: AsyncIOScheduler) -> None:
         scheduler.reschedule_job(CYCLE_JOB_ID, trigger="interval", minutes=config.cycle_interval_minutes)
 
 
+async def collect_market_metrics() -> None:
+    """Coleta de métricas de mercado (core/market_metrics.py). Isolada: qualquer
+    erro aqui só vira log -- nunca afeta ciclo, monitor nem posições."""
+    from core import market_metrics
+
+    try:
+        await asyncio.to_thread(market_metrics.collect_and_store)
+    except Exception:
+        logger.exception("Coleta de métricas de mercado falhou -- segue na próxima hora.")
+
+
 async def amain() -> None:
     config = load_runtime_config()
     # Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5): settings.timezone
@@ -145,6 +156,11 @@ async def amain() -> None:
     if settings.risk_monitor_seconds > 0:
         scheduler.add_job(monitor_open_positions, "interval", seconds=settings.risk_monitor_seconds,
                            id="position_monitor", misfire_grace_time=30, coalesce=True, max_instances=1)
+
+    if settings.market_metrics_minutes > 0:
+        scheduler.add_job(collect_market_metrics, "interval", minutes=settings.market_metrics_minutes,
+                          id="market_metrics", misfire_grace_time=600, coalesce=True, max_instances=1,
+                          next_run_time=dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=2))
 
     scheduler.start()
     logger.info(

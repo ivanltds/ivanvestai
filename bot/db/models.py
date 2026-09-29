@@ -150,6 +150,33 @@ class NewsItem(Base):
     dedup_hash: Mapped[str] = mapped_column(String, index=True, unique=True)
 
 
+class MarketMetric(Base):
+    """Métricas de mercado além do preço, gravadas de hora em hora pelo coletor
+    (core/market_metrics.py, 29/09/2026). Motivo: a API da Binance só guarda 30
+    dias de contratos em aberto e de proporção de posições -- sem gravar nós
+    mesmos, nunca haverá histórico pra testar esses dados no simulador.
+    Uma linha por (hora, par). `fear_greed` é do mercado todo (repetido em cada
+    linha da mesma coleta). Fonte do Medo e Ganância: alternative.me (exige
+    crédito à fonte onde o dado for exibido). Nenhum campo é usado em decisão
+    de trade -- só coleta."""
+
+    __tablename__ = "market_metrics"
+    __table_args__ = (Index("ix_market_metrics_symbol_ts", "symbol", "timestamp"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    timestamp: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=_now, server_default=func.now(), index=True)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    funding_rate: Mapped[float | None] = mapped_column(Float, nullable=True)          # último funding liquidado (fração, 0.0001 = 0,01%)
+    funding_time: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    open_interest: Mapped[float | None] = mapped_column(Float, nullable=True)         # contratos (moeda base)
+    open_interest_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    long_short_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)      # todas as contas
+    top_trader_long_short_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)  # top traders, por posição
+    taker_buy_sell_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)  # agressão compradora/vendedora
+    fear_greed: Mapped[int | None] = mapped_column(Integer, nullable=True)            # 0-100, alternative.me
+
+
 class Opportunity(Base):
     __tablename__ = "opportunities"
 

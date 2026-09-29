@@ -19,6 +19,7 @@ from core.indicators import (
     volatility_signals,
 )
 from core.risk_rules import is_stablecoin, is_stablecoin_peg, volatility_extreme
+from core import strategy_profile
 
 
 @dataclass
@@ -53,6 +54,34 @@ class MarketScannerAgent(BaseAgent):
         self._binance = binance if binance is not None else binance_client
 
     def run(self) -> list[ScannerOpportunity]:
+        # Perfil "final" (29/09/2026, core/strategy_profile.py): filtro de mercado
+        # ANTES de varrer os pares -- com o BTC fora de alta no 4h nenhuma compra
+        # nova é aberta, então nem gasta as ~300 chamadas de klines. Falha ao
+        # ler o BTC = sem oportunidades (lado seguro).
+        final = strategy_profile.is_final()
+        if final:
+            try:
+                df_btc = self._binance.get_klines_df("BTCUSDT", "4h", limit=120, closed_only=True)
+                btc_ok, btc_why = strategy_profile.btc_uptrend(df_btc)
+            except Exception as exc:
+                btc_ok, btc_why = False, f"falha lendo BTC ({exc!r})"
+            if not btc_ok:
+                vlog.warn(f"MarketScannerAgent [perfil final]: BTC fora de alta no 4h — sem novas compras ({btc_why}).")
+                return []
+            vlog.ok(f"MarketScannerAgent [perfil final]: filtro de BTC liberado ({btc_why}).")
+            fg_limit = settings.final_max_fear_greed
+            if fg_limit and fg_limit > 0:
+                fg, fg_src = strategy_profile.current_fear_greed()
+                fg_block = strategy_profile.fear_greed_block_reason(fg, fg_limit)
+                if fg_block:
+                    vlog.warn(f"MarketScannerAgent [perfil final]: {fg_block} — sem novas compras (fonte: {fg_src}).")
+                    return []
+                if fg is None:
+                    vlog.warn("MarketScannerAgent [perfil final]: Medo e Ganância indisponível — trava liberada, igual ao simulador.")
+                else:
+                    vlog.ok(f"MarketScannerAgent [perfil final]: Medo e Ganância {fg:g} <= {fg_limit:g} ({fg_src}).")
+        skipped_universe = 0
+
         pairs = self._binance.get_top_pairs_by_volume(
             quote=settings.safety_stablecoin, top_n=settings.top_n_pairs
         )
@@ -76,6 +105,10 @@ class MarketScannerAgent(BaseAgent):
                 # par NESTE ciclo (só bloqueia entrada nova, igual à janela de risco
                 # macro; gestão de posição já aberta nesse ativo não é afetada). A
                 # função já existia em core/risk_rules.py mas nunca era chamada.
+                if final and strategy_profile.universe_block_reason(pair, df_15m):
+                    skipped_universe += 1
+                    continue
+
                 candle_range_pct, atr_pct_avg, volume_ratio = volatility_signals(df_15m)
                 if volatility_extreme(candle_range_pct, atr_pct_avg, volume_ratio):
                     skipped_volatility += 1
@@ -146,6 +179,9 @@ class MarketScannerAgent(BaseAgent):
 
         if skipped:
             vlog.warn(f"MarketScannerAgent: {skipped} par(es) pulado(s) (histórico insuficiente ou erro de API).")
+        if skipped_universe:
+            vlog.step("🧹", "MarketScannerAgent", f"[perfil final] {skipped_universe} par(es) fora do universo "
+                      "(preço < US$ 0,05, volume 24h < US$ 20 mi ou lista de bloqueio).")
         if skipped_volatility:
             vlog.warn(f"MarketScannerAgent: {skipped_volatility} par(es) pulado(s) (volatilidade extrema).")
         if skipped_stablecoin_peg:

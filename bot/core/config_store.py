@@ -30,6 +30,10 @@ _RANGES: dict[str, tuple[float, float]] = {
     "max_allocation_pct_per_trade": (0.01, 1.0),
     "daily_loss_alert_pct": (0.0, 1.0),
     "top_n_pairs": (1, 500),
+    "final_max_fear_greed": (0, 100),
+    "final_pause_daily_loss_pct": (0, 50),
+    "final_pause_drawdown_pct": (0, 90),
+    "final_pause_days": (0, 60),
 }
 
 
@@ -43,6 +47,13 @@ _CASTERS = {
     "safety_stablecoin": str,
     "bot_status": str,  # "running" | "paused"
     "bypass_macro_risk_window": _cast_bool,
+    # Perfil de estratégia e travas do perfil final (29/09/2026) -- editáveis
+    # em /settings (sempre globais, ver web/lib/settings-shared.ts).
+    "strategy_profile": lambda v: v.strip().lower(),
+    "final_max_fear_greed": float,
+    "final_pause_daily_loss_pct": float,
+    "final_pause_drawdown_pct": float,
+    "final_pause_days": float,
 }
 
 
@@ -57,7 +68,14 @@ _ENV_DEFAULTS = {
     "daily_loss_alert_pct": env_settings.daily_loss_alert_pct,
     "top_n_pairs": env_settings.top_n_pairs,
     "safety_stablecoin": env_settings.safety_stablecoin,
+    "strategy_profile": env_settings.strategy_profile,
+    "final_max_fear_greed": env_settings.final_max_fear_greed,
+    "final_pause_daily_loss_pct": env_settings.final_pause_daily_loss_pct,
+    "final_pause_drawdown_pct": env_settings.final_pause_drawdown_pct,
+    "final_pause_days": env_settings.final_pause_days,
 }
+
+_STRATEGY_PROFILES = ("legacy", "final")
 
 
 @dataclass
@@ -74,6 +92,11 @@ class RuntimeConfig:
     # bloqueio de ENTRADA NOVA durante janela de risco macro (FOMC/CPI) quando
     # ligado pelo dashboard (/settings). NÃO afeta dry_run nem a gestão de
     # posições já abertas -- só a checagem de abrir posição nova.
+    strategy_profile: str = "final"
+    final_max_fear_greed: float = 50.0
+    final_pause_daily_loss_pct: float = 3.0
+    final_pause_drawdown_pct: float = 10.0
+    final_pause_days: float = 7.0
 
 
 def load_runtime_config(account_id: uuid.UUID | None = None) -> RuntimeConfig:
@@ -125,6 +148,9 @@ def load_runtime_config(account_id: uuid.UUID | None = None) -> RuntimeConfig:
             if key == "bot_status" and value not in ("running", "paused"):
                 logger.warning("config_store: bot_status=%r inválido (esperado running/paused) -- usando default %r.", value, default)
                 return default
+            if key == "strategy_profile" and value not in _STRATEGY_PROFILES:
+                logger.warning("config_store: strategy_profile=%r inválido (esperado legacy/final) -- usando default %r.", value, default)
+                return default
             if key == "safety_stablecoin" and not (value.isalnum() and value.isupper()):
                 logger.warning("config_store: safety_stablecoin=%r inválido -- usando default %r.", value, default)
                 return default
@@ -145,6 +171,11 @@ def load_runtime_config(account_id: uuid.UUID | None = None) -> RuntimeConfig:
         safety_stablecoin=pick("safety_stablecoin", _ENV_DEFAULTS["safety_stablecoin"]),
         bot_status=pick("bot_status", "paused"),  # começa pausado por segurança até backtest ser revisado
         bypass_macro_risk_window=pick("bypass_macro_risk_window", False),
+        strategy_profile=pick("strategy_profile", _ENV_DEFAULTS["strategy_profile"]),
+        final_max_fear_greed=pick("final_max_fear_greed", _ENV_DEFAULTS["final_max_fear_greed"]),
+        final_pause_daily_loss_pct=pick("final_pause_daily_loss_pct", _ENV_DEFAULTS["final_pause_daily_loss_pct"]),
+        final_pause_drawdown_pct=pick("final_pause_drawdown_pct", _ENV_DEFAULTS["final_pause_drawdown_pct"]),
+        final_pause_days=pick("final_pause_days", _ENV_DEFAULTS["final_pause_days"]),
     )
 
     apply_runtime_overrides(config)
@@ -162,3 +193,8 @@ def apply_runtime_overrides(config: RuntimeConfig) -> None:
     env_settings.min_confidence_to_trade = config.min_confidence_to_trade
     env_settings.top_n_pairs = config.top_n_pairs
     env_settings.safety_stablecoin = config.safety_stablecoin
+    env_settings.strategy_profile = config.strategy_profile
+    env_settings.final_max_fear_greed = config.final_max_fear_greed
+    env_settings.final_pause_daily_loss_pct = config.final_pause_daily_loss_pct
+    env_settings.final_pause_drawdown_pct = config.final_pause_drawdown_pct
+    env_settings.final_pause_days = config.final_pause_days

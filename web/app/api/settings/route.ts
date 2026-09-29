@@ -28,6 +28,11 @@ const VALIDATORS: Record<string, Validator> = {
   top_n_pairs: num(1, 500, true),
   cycle_interval_minutes: num(1, 1440, true),
   bypass_macro_risk_window: (v) => v === "true" || v === "false",
+  strategy_profile: (v) => v === "legacy" || v === "final",
+  final_max_fear_greed: num(0, 100),
+  final_pause_daily_loss_pct: num(0, 50),
+  final_pause_drawdown_pct: num(0, 90),
+  final_pause_days: num(0, 60),
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

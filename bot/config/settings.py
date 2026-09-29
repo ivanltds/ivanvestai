@@ -190,6 +190,11 @@ class Settings(BaseSettings):
     # 0 desliga. Sem o índice (API fora e sem valor recente no banco) = libera,
     # igual ao simulador. Editável em /settings.
     final_max_fear_greed: float = 50.0
+    # Limpeza de poeira (29/09/2026, core/dust_sweep.py): converte saldos
+    # pequenos em BNB a cada N horas, só nas contas com capital real.
+    # Editável em /settings.
+    dust_sweep_enabled: bool = True
+    dust_sweep_interval_hours: float = 24.0
 
     top_n_pairs: int = 100
     safety_stablecoin: str = "USDT"

@@ -20,4 +20,6 @@ export const ALWAYS_GLOBAL_KEYS = new Set<string>([
   "final_pause_daily_loss_pct",
   "final_pause_drawdown_pct",
   "final_pause_days",
+  "dust_sweep_enabled",
+  "dust_sweep_interval_hours",
 ]);

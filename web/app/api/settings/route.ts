@@ -33,6 +33,8 @@ const VALIDATORS: Record<string, Validator> = {
   final_pause_daily_loss_pct: num(0, 50),
   final_pause_drawdown_pct: num(0, 90),
   final_pause_days: num(0, 60),
+  dust_sweep_enabled: (v) => v === "true" || v === "false",
+  dust_sweep_interval_hours: num(6, 720),
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

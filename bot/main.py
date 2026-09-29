@@ -127,6 +127,18 @@ async def collect_market_metrics() -> None:
         logger.exception("Coleta de métricas de mercado falhou -- segue na próxima hora.")
 
 
+async def dust_sweep() -> None:
+    """Limpeza de poeira (core/dust_sweep.py): de hora em hora checa se já é
+    hora de converter os saldos pequenos em BNB. Isolada: erro só vira log."""
+    from core import dust_sweep as ds
+
+    try:
+        await asyncio.to_thread(load_runtime_config)  # pega liga/desliga e intervalo de /settings
+        await asyncio.to_thread(ds.run_dust_sweep)
+    except Exception:
+        logger.exception("Limpeza de poeira falhou -- tenta de novo na próxima hora.")
+
+
 async def amain() -> None:
     config = load_runtime_config()
     # Achado 24/09/2026 (arquitetura-tecnica.md 9.20, Fase 5): settings.timezone
@@ -161,6 +173,10 @@ async def amain() -> None:
         scheduler.add_job(collect_market_metrics, "interval", minutes=settings.market_metrics_minutes,
                           id="market_metrics", misfire_grace_time=600, coalesce=True, max_instances=1,
                           next_run_time=dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=2))
+
+    scheduler.add_job(dust_sweep, "interval", minutes=60, id="dust_sweep", misfire_grace_time=600,
+                      coalesce=True, max_instances=1,
+                      next_run_time=dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5))
 
     scheduler.start()
     logger.info(

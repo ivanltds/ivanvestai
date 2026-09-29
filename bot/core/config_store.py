@@ -34,6 +34,7 @@ _RANGES: dict[str, tuple[float, float]] = {
     "final_pause_daily_loss_pct": (0, 50),
     "final_pause_drawdown_pct": (0, 90),
     "final_pause_days": (0, 60),
+    "dust_sweep_interval_hours": (6, 720),
 }
 
 
@@ -54,6 +55,8 @@ _CASTERS = {
     "final_pause_daily_loss_pct": float,
     "final_pause_drawdown_pct": float,
     "final_pause_days": float,
+    "dust_sweep_enabled": _cast_bool,
+    "dust_sweep_interval_hours": float,
 }
 
 
@@ -73,6 +76,8 @@ _ENV_DEFAULTS = {
     "final_pause_daily_loss_pct": env_settings.final_pause_daily_loss_pct,
     "final_pause_drawdown_pct": env_settings.final_pause_drawdown_pct,
     "final_pause_days": env_settings.final_pause_days,
+    "dust_sweep_enabled": env_settings.dust_sweep_enabled,
+    "dust_sweep_interval_hours": env_settings.dust_sweep_interval_hours,
 }
 
 _STRATEGY_PROFILES = ("legacy", "final")
@@ -97,6 +102,8 @@ class RuntimeConfig:
     final_pause_daily_loss_pct: float = 3.0
     final_pause_drawdown_pct: float = 10.0
     final_pause_days: float = 7.0
+    dust_sweep_enabled: bool = True
+    dust_sweep_interval_hours: float = 24.0
 
 
 def load_runtime_config(account_id: uuid.UUID | None = None) -> RuntimeConfig:
@@ -176,6 +183,8 @@ def load_runtime_config(account_id: uuid.UUID | None = None) -> RuntimeConfig:
         final_pause_daily_loss_pct=pick("final_pause_daily_loss_pct", _ENV_DEFAULTS["final_pause_daily_loss_pct"]),
         final_pause_drawdown_pct=pick("final_pause_drawdown_pct", _ENV_DEFAULTS["final_pause_drawdown_pct"]),
         final_pause_days=pick("final_pause_days", _ENV_DEFAULTS["final_pause_days"]),
+        dust_sweep_enabled=pick("dust_sweep_enabled", _ENV_DEFAULTS["dust_sweep_enabled"]),
+        dust_sweep_interval_hours=pick("dust_sweep_interval_hours", _ENV_DEFAULTS["dust_sweep_interval_hours"]),
     )
 
     apply_runtime_overrides(config)
@@ -198,3 +207,5 @@ def apply_runtime_overrides(config: RuntimeConfig) -> None:
     env_settings.final_pause_daily_loss_pct = config.final_pause_daily_loss_pct
     env_settings.final_pause_drawdown_pct = config.final_pause_drawdown_pct
     env_settings.final_pause_days = config.final_pause_days
+    env_settings.dust_sweep_enabled = config.dust_sweep_enabled
+    env_settings.dust_sweep_interval_hours = config.dust_sweep_interval_hours

@@ -39,6 +39,12 @@ const FIELDS: {
   { key: "final_pause_drawdown_pct", label: "Final: pausa compras com queda do pico de (%; 0 desliga)", type: "number" },
   { key: "final_pause_days", label: "Final: duração da pausa por queda (dias)", type: "number" },
   {
+    key: "dust_sweep_enabled",
+    label: "Limpar poeira automaticamente (converte saldos pequenos em BNB)",
+    type: "checkbox",
+  },
+  { key: "dust_sweep_interval_hours", label: "Intervalo da limpeza de poeira (horas, mínimo 6)", type: "number" },
+  {
     key: "bypass_macro_risk_window",
     label: "Desbloquear entradas novas durante janela de risco macro (FOMC/CPI)",
     type: "checkbox",

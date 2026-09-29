@@ -22,6 +22,8 @@ const DEFAULTS: Record<string, string> = {
   final_pause_daily_loss_pct: "3",
   final_pause_drawdown_pct: "10",
   final_pause_days: "7",
+  dust_sweep_enabled: "true",
+  dust_sweep_interval_hours: "24",
 };
 
 export const dynamic = "force-dynamic";
@@ -130,8 +132,8 @@ export default async function SettingsPage({
         <p style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12, maxWidth: 460, lineHeight: 1.5 }}>
           Editando só a conta <strong>{selectedAccount.label}</strong>. Um campo marcado &quot;próprio desta conta&quot;
           abaixo já tem um valor diferente do Padrão -- os demais mostram e usam o valor Padrão até você mudar e
-          salvar aqui (o que cria um override só pra esta conta, sem afetar as outras). Moeda de exibição, estratégia e travas do
-          perfil final valem sempre para todas as contas (gravam no Padrão).
+          salvar aqui (o que cria um override só pra esta conta, sem afetar as outras). Moeda de exibição, estratégia, travas do perfil final e limpeza de poeira
+          valem sempre para todas as contas (gravam no Padrão).
         </p>
       )}
 
